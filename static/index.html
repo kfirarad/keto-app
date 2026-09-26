@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f4f1ea">
+<title>Keto log</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main>
+  <nav class="daynav" aria-label="Day">
+    <button type="button" id="prev" aria-label="Previous day">&larr;</button>
+    <h1 id="date">--/--/----</h1>
+    <button type="button" id="next" aria-label="Next day">&rarr;</button>
+    <button type="button" id="today" class="today">Today</button>
+  </nav>
+
+  <section class="hero" id="hero" aria-label="Net carbs">
+    <p class="hero-line"><span class="hero-num" id="net">0</span> <span class="hero-goal">/ <span id="goal">20</span> g</span></p>
+    <div class="bar" aria-hidden="true"><div class="bar-fill" id="bar"></div></div>
+    <p class="status" id="status">20 g remaining</p>
+  </section>
+
+  <p class="secondary" id="secondary" hidden></p>
+
+  <section class="entries" id="entries" aria-label="Entries"></section>
+
+  <form id="form" class="add" autocomplete="off" novalidate>
+    <div class="field wide">
+      <label for="f-item">Item</label>
+      <input id="f-item" name="item" dir="auto" required>
+    </div>
+    <div class="field wide">
+      <label for="f-quantity">Quantity</label>
+      <input id="f-quantity" name="quantity" dir="auto">
+    </div>
+    <div class="field">
+      <label for="f-net">Net carbs g</label>
+      <input id="f-net" name="net_carbs_g" inputmode="decimal" required>
+    </div>
+    <div class="field">
+      <label for="f-cal">Calories</label>
+      <input id="f-cal" name="calories" inputmode="decimal">
+    </div>
+    <div class="field">
+      <label for="f-fat">Fat g</label>
+      <input id="f-fat" name="fat_g" inputmode="decimal">
+    </div>
+    <div class="field">
+      <label for="f-protein">Protein g</label>
+      <input id="f-protein" name="protein_g" inputmode="decimal">
+    </div>
+    <div class="field">
+      <label for="f-time">Time</label>
+      <input id="f-time" name="time" type="time">
+    </div>
+    <div class="field">
+      <label for="f-meal">Meal</label>
+      <input id="f-meal" name="meal" dir="auto">
+    </div>
+    <div class="field">
+      <label for="f-fast">Fasting hours</label>
+      <input id="f-fast" name="fasting_hours" inputmode="decimal">
+    </div>
+    <div class="field wide">
+      <label for="f-notes">Notes</label>
+      <input id="f-notes" name="notes" dir="auto">
+    </div>
+    <div class="actions wide">
+      <button type="submit" id="save">Add</button>
+      <p class="error" id="error" role="alert"></p>
+    </div>
+  </form>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

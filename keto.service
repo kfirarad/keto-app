@@ -1,0 +1,14 @@
+[Unit]
+Description=Keto tracker (web UI on 127.0.0.1:8787)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/kfir/dev/keto
+ExecStart=/usr/bin/python3 /home/kfir/dev/keto/server.py
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

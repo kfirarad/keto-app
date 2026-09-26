@@ -1,0 +1,146 @@
+:root {
+  --paper: #f4f1ea;
+  --ink: #1c1917;
+  --muted: #78716c;
+  --line: #e7e5e4;
+  --under: #3f6212;
+  --over: #9a3412;
+  --state: var(--under);
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --sans: ui-sans-serif, system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+main {
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: 1rem 1rem 3rem;
+}
+
+body.over { --state: var(--over); }
+
+button {
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+
+/* Day navigation */
+.daynav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+.daynav h1 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.daynav .today { margin-left: auto; }
+.daynav .today[disabled] { color: var(--muted); cursor: default; border-color: transparent; }
+
+/* Hero */
+.hero { padding: 1.5rem 0 1rem; }
+.hero-line { margin: 0; display: flex; align-items: baseline; gap: 0.5rem; }
+.hero-num {
+  font-family: var(--serif);
+  font-size: 4.5rem;
+  line-height: 1;
+  color: var(--state);
+  font-variant-numeric: lining-nums tabular-nums;
+}
+.hero-goal { font-size: 1.25rem; color: var(--muted); }
+.bar { height: 4px; background: var(--line); margin-top: 0.9rem; }
+.bar-fill { height: 4px; width: 0; background: var(--state); }
+.status { margin: 0.5rem 0 0; font-size: 0.9rem; color: var(--state); }
+
+.secondary {
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Entries */
+.entries { border-top: 1px solid var(--line); }
+.entries .empty { margin: 1rem 0; color: var(--muted); }
+.meal {
+  margin: 1rem 0 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.entries ol { list-style: none; margin: 0; padding: 0; }
+.row {
+  display: grid;
+  grid-template-columns: 3.25rem 1fr auto;
+  column-gap: 0.5rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.row .time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 0.9rem; padding-top: 0.1rem; }
+.row .body { min-width: 0; overflow-wrap: anywhere; }
+.row .item { font-weight: 500; }
+.row .qty { color: var(--muted); }
+.row .carbs { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.row .nums, .row .notes { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.row .notes { margin-top: 0.15rem; }
+.row p { margin: 0; }
+
+/* Add form */
+.add {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-top: 1.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--ink);
+}
+.field { display: flex; flex-direction: column; min-width: 0; }
+.wide { grid-column: 1 / -1; }
+.field label { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.2rem; }
+.field input {
+  font: inherit;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.45rem 0.55rem;
+  min-width: 0;
+  width: 100%;
+}
+.field input[inputmode="decimal"], .field input[type="time"] { font-variant-numeric: tabular-nums; }
+.actions { display: flex; align-items: center; gap: 0.75rem; }
+.actions button { background: var(--ink); color: var(--paper); border-color: var(--ink); padding: 0.5rem 1.25rem; }
+.actions button[disabled] { opacity: 0.6; cursor: default; }
+.error { margin: 0; color: var(--over); font-size: 0.9rem; }
+
+@media (min-width: 30rem) {
+  .add { grid-template-columns: repeat(4, 1fr); }
+  .field.wide { grid-column: span 2; }
+  .actions.wide { grid-column: 1 / -1; }
+}
