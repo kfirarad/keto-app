@@ -1,0 +1,1033 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#fbfaf6">
+<title>Keto log</title>
+<style>
+/* ---------- tokens ---------- */
+:root {
+  --paper: #f4f1ea;
+  --ink: #1c1917;
+  --muted: #78716c;
+  --line: #e7e5e4;
+  --under: #3f6212;
+  --over: #9a3412;
+
+  --muted-ink: #66605a;      /* muted text that must pass 4.5:1 on paper */
+  --bg: #fbfaf6;             /* page ground, a lighter paper */
+  --edge: #e3ded4;           /* control borders (line is too faint for inputs) */
+  --surface: #ffffff;        /* sheets, inputs */
+  --hl: #f3f0e8;             /* expanded row, current day */
+  --track: rgb(255 255 255 / .75);
+  --empty: #d9d4cb;          /* days with no entries */
+  --under-tint: #edf4de;
+  --over-tint: #fce6d7;
+
+  --accent: #4d7c0f;         /* fresh green: primary actions, meal names */
+  --accent-hi: #65a30d;      /* bars */
+  --accent-tint: #edf4de;
+  --on-accent: #ffffff;
+  --fast: #0369a1;           /* fasting: sky */
+  --fast-bar: #38bdf8;
+  --fast-tint: #e4f3fc;
+  --body: #be185d;           /* body readings: rose */
+  --body-tint: #fcebf2;
+  --scrim: rgb(28 25 23 / .34);
+
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, Menlo, Consolas, monospace;
+
+  --t-2xs: 11px;
+  --t-xs: 12px;
+  --t-sm: 13px;
+  --t-md: 15px;
+  --t-input: 16px;           /* 16px stops iOS zoom on focus */
+  --t-lg: 17px;
+  --t-xl: 22px;
+  --t-hero: 64px;
+
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+
+  --r-1: 3px;
+  --r-2: 12px;
+  --r-3: 22px;
+  --r-pill: 999px;
+
+  --tap: 44px;
+  --tap-min: 40px;
+  --page: 34rem;
+  --time-col: 3.1rem;
+  --bar-h: 76px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #171513;
+    --ink: #ece7df;
+    --muted: #a0978d;
+    --line: #2d2925;
+    --under: #a5c46e;
+    --over: #ee8b5e;
+    --muted-ink: #aba298;
+    --bg: #131210;
+    --edge: #3a3631;
+    --surface: #1d1b18;
+    --hl: #25221e;
+    --track: rgb(255 255 255 / .1);
+    --empty: #4a443e;
+    --under-tint: #1f2a14;
+    --over-tint: #35200f;
+    --accent: #9fd356;
+    --accent-hi: #86c53a;
+    --accent-tint: #1f2a14;
+    --on-accent: #10140a;
+    --fast: #7cc8f2;
+    --fast-bar: #38bdf8;
+    --fast-tint: #122634;
+    --body: #f38bb4;
+    --body-tint: #33161f;
+    --scrim: rgb(0 0 0 / .55);
+  }
+}
+
+/* ---------- base ---------- */
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: var(--t-md)/1.45 var(--font-sans); }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: var(--r-1); }
+[hidden] { display: none !important; }
+.num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted-ink); }
+.tone { color: var(--under); }
+.is-over .tone, .tone.over { color: var(--over); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.app { max-width: var(--page); margin: 0 auto; padding: 0 var(--s-4) calc(var(--bar-h) + var(--s-6)); }
+
+/* buttons */
+.btn { min-height: var(--tap-min); padding: 0 var(--s-4); border: 1px solid var(--edge); border-radius: var(--r-pill); background: var(--surface); font-size: var(--t-sm); white-space: nowrap; }
+.btn:hover { border-color: var(--muted); }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.btn-primary:hover { border-color: var(--accent); filter: brightness(1.08); }
+.btn-danger { color: var(--over); background: transparent; }
+.link { min-height: var(--tap-min); padding: 0 var(--s-2); border: 0; background: none; font-size: inherit; color: var(--ink); text-decoration: underline; text-decoration-color: var(--edge); text-underline-offset: 3px; }
+.link:hover { text-decoration-color: currentColor; }
+.icon-btn { width: var(--tap); height: var(--tap); display: grid; place-items: center; border: 0; border-radius: var(--r-2); background: none; font-size: var(--t-xl); line-height: 1; }
+.icon-btn:hover { background: var(--hl); }
+
+/* fields */
+.field { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: var(--t-xs); color: var(--muted-ink); }
+.field input, .field select, .field textarea { width: 100%; min-height: var(--tap); padding: 0 var(--s-2); border: 1px solid var(--edge); border-radius: var(--r-2); background: var(--surface); color: var(--ink); font-size: var(--t-input); }
+.field textarea { padding: var(--s-2); min-height: 64px; resize: vertical; }
+.field.key input { border-color: var(--accent); border-width: 2px; font-weight: 600; }
+.check { display: flex; align-items: center; gap: var(--s-2); min-height: var(--tap); font-size: var(--t-sm); }
+.check input { width: 20px; height: 20px; margin: 0; accent-color: var(--accent); }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-2) var(--s-3); }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s-2); }
+.row-btns { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; }
+
+/* meters */
+.meter { position: relative; height: 10px; border-radius: 5px; background: var(--track); }
+.meter > i { position: absolute; inset: 0 auto 0 0; border-radius: 5px; background: var(--accent-hi); }
+.is-over .meter > i { background: var(--over); }
+.meter.thin { height: 6px; }
+.meter.ink > i { background: var(--fast-bar); }
+
+/* ---------- prototype control (not part of the design) ---------- */
+.proto { max-width: var(--page); margin: var(--s-2) auto 0; padding: var(--s-2) var(--s-3); display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); border: 1px dashed var(--muted); border-radius: var(--r-2); font: var(--t-xs)/1.3 var(--font-mono); color: var(--muted-ink); }
+.proto select { font: inherit; min-height: 32px; flex: 1; }
+
+/* ---------- 1. day navigation ---------- */
+.nav { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: var(--s-1); height: 56px; margin: 0 calc(-1 * var(--s-4)); padding: 0 var(--s-2); background: var(--bg); }
+.nav h1 { flex: 1; margin: 0; text-align: center; font-size: var(--t-md); font-weight: 600; line-height: 1.2; }
+.nav h1 small { display: block; font-size: var(--t-xs); font-weight: 400; color: var(--muted-ink); }
+.nav .btn { margin-left: var(--s-1); }
+
+/* ---------- 2–4. at a glance ---------- */
+.glance { margin-top: var(--s-2); padding: var(--s-5) var(--s-4) var(--s-4); border-radius: var(--r-3); background: var(--under-tint); }
+.glance.is-over { background: var(--over-tint); }
+.glance .hero-num { color: var(--accent); }
+.glance.is-over .hero-num { color: var(--over); }
+.net-label { margin: 0 0 var(--s-1); color: var(--muted-ink); }
+.hero { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s-4); margin: 0; }
+.hero-num { font: var(--t-hero)/.9 var(--font-serif); letter-spacing: -.02em; }
+.hero-goal { margin-left: var(--s-1); font-size: var(--t-lg); color: var(--muted-ink); white-space: nowrap; }
+.hero-left { text-align: right; line-height: 1.15; }
+.hero-left b { display: block; font: var(--t-xl)/1.1 var(--font-serif); font-weight: 400; }
+.eyebrow { font-size: var(--t-2xs); font-weight: 600; letter-spacing: .09em; text-transform: uppercase; }
+.glance .meter { margin: var(--s-3) 0 var(--s-2); }
+.goal { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--s-1); margin: 0; font-size: var(--t-sm); color: var(--muted-ink); }
+.goal .link { margin-left: auto; padding-right: 0; }
+.goal-edit { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s-2); margin: var(--s-2) 0; }
+.goal-edit .field { width: 7rem; }
+.facts { margin: var(--s-1) 0 0; font-size: var(--t-sm); color: var(--muted-ink); }
+.facts span { white-space: nowrap; }
+
+.fast { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--s-1) var(--s-3); margin: var(--s-4) calc(-1 * var(--s-2)) 0; padding: var(--s-3); border-radius: var(--r-2); background: var(--surface); }
+.fast.on { background: var(--fast-tint); }
+.fast.on .eyebrow, .fast.on .fast-time { color: var(--fast); }
+.fast.on .btn { border-color: var(--fast); color: var(--fast); background: transparent; }
+.fast-now { display: flex; align-items: baseline; gap: var(--s-2); }
+.fast-time { font: var(--t-xl)/1.1 var(--font-serif); }
+.fast .meter { grid-column: 1 / -1; margin-top: var(--s-1); }
+.fast-meta { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: var(--s-2); font-size: var(--t-xs); color: var(--muted-ink); }
+.fast.off { font-size: var(--t-sm); color: var(--muted-ink); }
+
+/* ---------- section headers ---------- */
+.sec-h { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); margin: var(--s-5) 0 var(--s-2); }
+.sec-h h2 { margin: 0; font-size: var(--t-2xs); font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted-ink); }
+.sec-h .link { font-size: var(--t-sm); padding-right: 0; }
+
+/* ---------- 10. log again ---------- */
+.chips { display: flex; gap: var(--s-2); margin: 0 calc(-1 * var(--s-4)); padding: 0 var(--s-4) var(--s-1); overflow-x: auto; scrollbar-width: none; }
+.chips::-webkit-scrollbar { display: none; }
+.chip { flex: none; display: inline-flex; align-items: center; gap: var(--s-2); min-height: var(--tap); padding: 0 var(--s-4); border: 1px solid transparent; border-radius: var(--r-pill); background: var(--accent-tint); font-size: var(--t-sm); white-space: nowrap; }
+.chip:hover { border-color: var(--accent-hi); }
+.chip .num { color: var(--accent); font-weight: 600; }
+
+/* ---------- 8. entries ---------- */
+.log-count { font-size: var(--t-xs); color: var(--muted-ink); font-weight: 400; letter-spacing: 0; text-transform: none; margin-left: var(--s-1); }
+.meal-h { display: flex; align-items: center; gap: var(--s-2); margin-top: var(--s-3); padding: 0 0 0 calc(var(--time-col) + var(--s-3)); }
+.meal-h h3 { flex: 1; min-width: 0; margin: 0; text-align: start; font-size: var(--t-sm); font-weight: 600; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meal-h .num { font-size: var(--t-sm); color: var(--muted-ink); }
+.meal-h .link { font-size: var(--t-xs); padding-right: 0; }
+.rows { list-style: none; margin: 0; padding: 0; }
+.row { margin: 0 calc(-1 * var(--s-2)); padding: 0 var(--s-2); border-bottom: 1px solid var(--line); border-radius: var(--r-2); }
+.row.open { background: var(--hl); border-bottom-color: transparent; }
+.row.editing { background: var(--accent-tint); border-bottom-color: transparent; }
+.row-main { display: grid; grid-template-columns: var(--time-col) minmax(0, 1fr) auto; gap: var(--s-3); align-items: start; width: 100%; min-height: 52px; padding: var(--s-2) 0; border: 0; background: none; text-align: start; }
+.row-main > span { display: block; min-width: 0; }
+.row .t { padding-top: 1px; font-size: var(--t-sm); color: var(--muted-ink); line-height: 1.3; }
+.row .brk { display: block; font-size: var(--t-2xs); color: var(--ink); }
+.row .it, .row .q { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .it { font-weight: 500; }
+.row .q { font-size: var(--t-sm); color: var(--muted-ink); }
+.row.open .it, .row.open .q { white-space: normal; }
+.row .c { font-size: var(--t-md); text-align: right; }
+.row .c small { font-size: var(--t-xs); color: var(--muted-ink); }
+.row-more { display: grid; gap: var(--s-2); padding: 0 0 var(--s-3) calc(var(--time-col) + var(--s-3)); font-size: var(--t-sm); }
+.row-more p { margin: 0; }
+.row-more .notes { color: var(--muted-ink); }
+.row .tag { font-size: var(--t-2xs); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.empty { margin: var(--s-3) 0; color: var(--muted-ink); }
+
+/* ---------- secondary: week, fasting, body ---------- */
+.more { margin-top: var(--s-6); border-top: 1px solid var(--line); }
+.more [data-sec=week] .eyebrow { color: var(--accent); }
+.more [data-sec=fast] .eyebrow { color: var(--fast); }
+.more [data-sec=body] .eyebrow { color: var(--body); }
+.more > details { border-bottom: 1px solid var(--line); }
+.more summary { display: flex; align-items: center; gap: var(--s-3); min-height: 56px; list-style: none; cursor: pointer; }
+.more summary::-webkit-details-marker { display: none; }
+.more summary .eyebrow { width: 4.5rem; flex: none; color: var(--muted-ink); }
+.more summary .sum { flex: 1; min-width: 0; font-size: var(--t-sm); }
+.more summary::after { content: "+"; width: 1rem; text-align: center; color: var(--muted-ink); font-size: var(--t-lg); }
+.more details[open] > summary::after { content: "\2013"; }
+.panel { display: grid; gap: var(--s-3); padding: 0 0 var(--s-4); }
+.panel p { margin: 0; font-size: var(--t-sm); }
+
+.week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--s-1); }
+.day { display: flex; flex-direction: column; align-items: center; gap: var(--s-1); min-height: var(--tap); padding: var(--s-2) 0 var(--s-1); border: 0; border-radius: var(--r-2); background: none; font-size: var(--t-xs); }
+.day:hover { background: var(--hl); }
+.day.cur { background: var(--accent-tint); }
+.day .v { font-size: var(--t-xs); }
+.day.over .v { color: var(--over); font-weight: 700; }
+.plot { position: relative; width: 55%; height: 72px; }
+.plot i { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 6px 6px 2px 2px; background: var(--accent-hi); }
+.day.over .plot i { background: repeating-linear-gradient(-45deg, var(--over) 0 3px, var(--over-tint) 3px 5px); outline: 1px solid var(--over); }
+.day.none .plot i { background: var(--empty); height: 2px !important; }
+.plot b { position: absolute; left: -22%; right: -22%; border-top: 1px dashed var(--muted); }
+.day .lbl { color: var(--muted-ink); white-space: nowrap; }
+.day.cur .lbl { color: var(--ink); font-weight: 600; }
+
+.fasts { list-style: none; margin: 0; padding: 0; font-size: var(--t-sm); }
+.fasts li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); padding: var(--s-1) 0; border-top: 1px solid var(--line); }
+.fasts li > span { flex: 1; min-width: 12rem; }
+.fast-edit { flex-basis: 100%; display: grid; gap: var(--s-2); padding: var(--s-2) 0; }
+
+.spark { width: 100%; height: 48px; display: block; }
+.spark polyline { fill: none; stroke: var(--body); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.spark circle { fill: var(--ink); }
+.water { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
+.water p { flex: 1; }
+
+.foot { padding: var(--s-5) 0; font-size: var(--t-sm); color: var(--muted-ink); }
+
+/* ---------- 12. pinned add bar ---------- */
+.pinbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; padding: var(--s-3) var(--s-4) calc(var(--s-3) + env(safe-area-inset-bottom)); background: color-mix(in srgb, var(--bg) 88%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-top: 1px solid var(--line); }
+.pinbar-in { max-width: calc(var(--page) - 2 * var(--s-4)); margin: 0 auto; display: flex; align-items: center; gap: var(--s-3); }
+.pinbar .left { font-size: var(--t-sm); line-height: 1.2; }
+.pinbar .left b { display: block; font: var(--t-lg)/1.1 var(--font-serif); font-weight: 400; }
+.pinbar .btn-primary { flex: 1; min-height: 48px; font-size: var(--t-md); }
+
+/* ---------- 9, 11. sheets ---------- */
+.scrim { position: fixed; inset: 0; z-index: 20; background: var(--scrim); }
+.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 21; max-width: var(--page); max-height: 92dvh; margin: 0 auto; overflow: auto; overscroll-behavior: contain; padding: var(--s-2) var(--s-4) 0; background: var(--surface); border-radius: var(--r-3) var(--r-3) 0 0; }
+.grab { width: 36px; height: 4px; margin: 0 auto var(--s-2); border-radius: 2px; background: var(--edge); }
+.sheet-h { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-2); }
+.sheet-h h2 { flex: 1; min-width: 0; margin: 0; font-size: var(--t-lg); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.form { display: grid; gap: var(--s-3); }
+.item-wrap { position: relative; }
+.sugg { list-style: none; margin: var(--s-1) 0 0; padding: 0; border: 1px solid var(--edge); border-radius: var(--r-2); background: var(--surface); overflow: hidden; }
+.sugg button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 var(--s-3); width: 100%; min-height: var(--tap); padding: var(--s-1) var(--s-3); border: 0; border-top: 1px solid var(--line); background: none; text-align: start; font-size: var(--t-sm); }
+.sugg li:first-child button { border-top: 0; }
+.sugg button:hover { background: var(--hl); }
+.sugg .it { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sugg .meta { grid-column: 1 / -1; font-size: var(--t-xs); color: var(--muted-ink); }
+.weight { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: var(--s-2) var(--s-3); align-items: end; }
+.portions { display: flex; gap: var(--s-1); }
+.portions .btn { flex: 1; min-height: var(--tap); padding: 0; }
+.portions .btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.was { grid-column: 1 / -1; margin: -4px 0 0; font-size: var(--t-xs); color: var(--muted-ink); }
+.form details { border-top: 1px solid var(--line); }
+.form details > summary { display: flex; align-items: center; gap: var(--s-2); min-height: var(--tap); list-style: none; cursor: pointer; font-size: var(--t-sm); }
+.form details > summary::-webkit-details-marker { display: none; }
+.form details > summary b { font-weight: 600; }
+.form details > summary .sum { flex: 1; min-width: 0; color: var(--muted-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+.form details[open] > summary .sum { visibility: hidden; }
+.form details .inner { display: grid; gap: var(--s-3); padding-bottom: var(--s-3); }
+.calc { padding: var(--s-3); border: 1px solid var(--line); border-radius: var(--r-2); display: grid; gap: var(--s-2); }
+.calc legend { padding: 0 var(--s-1); font-size: var(--t-xs); color: var(--muted-ink); }
+.preview { margin: 0; padding: var(--s-2) var(--s-3); border-radius: var(--r-2); background: var(--under-tint); font-size: var(--t-sm); }
+.preview.over { background: var(--over-tint); }
+.sheet-actions { position: sticky; bottom: 0; display: flex; gap: var(--s-2); margin: 0 calc(-1 * var(--s-4)); padding: var(--s-3) var(--s-4) calc(var(--s-3) + env(safe-area-inset-bottom)); background: var(--surface); border-top: 1px solid var(--line); }
+.sheet-actions .btn { min-height: 48px; font-size: var(--t-md); }
+.sheet-actions .btn-primary { flex: 1; }
+.copy-list { list-style: none; margin: 0; padding: 0; }
+.copy-list label { display: grid; grid-template-columns: 20px var(--time-col) minmax(0, 1fr) auto; gap: var(--s-2); align-items: center; min-height: var(--tap); border-bottom: 1px solid var(--line); font-size: var(--t-sm); }
+.copy-list input { width: 20px; height: 20px; margin: 0; accent-color: var(--accent); }
+.copy-list .it { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- toast ---------- */
+.toast { position: fixed; left: 50%; bottom: calc(var(--bar-h) + var(--s-3)); z-index: 30; transform: translateX(-50%); display: flex; align-items: center; gap: var(--s-2); width: max-content; max-width: calc(100% - 2 * var(--s-4)); min-height: var(--tap); padding: 0 var(--s-1) 0 var(--s-4); border-radius: var(--r-2); background: var(--ink); color: var(--paper); font-size: var(--t-sm); }
+.toast span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toast button { flex: none; min-height: var(--tap-min); padding: 0 var(--s-3); border: 0; background: none; color: var(--paper); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.toast button:focus-visible { outline-color: var(--paper); }
+</style>
+</head>
+<body>
+
+<div class="proto" role="group" aria-label="Prototype control">
+  <strong>PROTOTYPE CONTROL</strong><span>not part of the design ·</span>
+  <label for="proto-state" class="sr">Prototype state</label>
+  <select id="proto-state">
+    <option value="normal">Normal day, under goal, fasting</option>
+    <option value="notfasting">Normal day, not fasting</option>
+    <option value="over">Over-goal day (23.4 of 20)</option>
+    <option value="empty">Empty day (today)</option>
+    <option value="add">Add sheet: past item picked, weight changed</option>
+    <option value="edit">Editing an entry</option>
+    <option value="copy">Copy panel open</option>
+    <option value="toast">Undo toast visible</option>
+    <option value="hebrew">Hebrew-heavy long names and notes</option>
+  </select>
+</div>
+
+<main class="app">
+  <nav class="nav" id="nav" aria-label="Day"></nav>
+  <section class="glance" id="glance" aria-label="Day at a glance"></section>
+  <section id="quick" aria-label="Log again"></section>
+  <section id="log" aria-label="Entries"></section>
+  <section class="more" id="more" aria-label="Week, fasting and body"></section>
+  <footer class="foot">Export CSV:
+    <a class="link" href="/api/export/entries.csv">entries</a> ·
+    <a class="link" href="/api/export/fasts.csv">fasts</a> ·
+    <a class="link" href="/api/export/body.csv">body</a>
+  </footer>
+</main>
+
+<div class="pinbar" id="pinbar"></div>
+<div id="sheet"></div>
+<div id="toast" aria-live="polite"></div>
+
+<script>
+"use strict";
+
+/* =========================================================================
+   Clock. The prototype pretends it is 27/09/2026 01:23 in Copenhagen and
+   keeps ticking from there so the running fast is live.
+   ========================================================================= */
+const TZ = "Europe/Copenhagen";
+const MOCK_NOW = Date.parse("2026-09-27T01:23:00+02:00");
+const PAGE_T0 = Date.now();
+const now = () => new Date(MOCK_NOW + (Date.now() - PAGE_T0));
+
+/* ---------- formatting ---------- */
+function parts(d) {
+  const p = {};
+  for (const x of new Intl.DateTimeFormat("en-GB", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", weekday: "long", hourCycle: "h23" }).formatToParts(d)) p[x.type] = x.value;
+  return p;
+}
+const dmy = d => { const p = parts(d); return `${p.day}/${p.month}/${p.year}`; };
+const dm = d => { const p = parts(d); return `${p.day}/${p.month}`; };
+const hm = d => { const p = parts(d); return `${p.hour}:${p.minute}`; };
+const isoLocal = d => { const p = parts(d); return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`; };
+const dmyToIso = s => s.split("/").reverse().join("-");
+const isoToDmy = s => s.split("-").reverse().join("/");
+const dmyToDate = s => new Date(dmyToIso(s) + "T12:00:00Z");
+const addDays = (s, n) => { const d = dmyToDate(s); d.setUTCDate(d.getUTCDate() + n); return `${String(d.getUTCDate()).padStart(2, "0")}/${String(d.getUTCMonth() + 1).padStart(2, "0")}/${d.getUTCFullYear()}`; };
+const weekday = (s, len) => dmyToDate(s).toLocaleDateString("en-GB", { weekday: len, timeZone: "UTC" });
+const today = () => dmy(now());
+const g = n => String(Math.round((+n || 0) * 10) / 10);            // 17.3, 1, 0
+const kcal = n => String(Math.round(+n || 0));
+const dur = h => { const m = Math.max(0, Math.round(h * 60)); return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} m`; };
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const ut = s => `<bdi dir="auto">${esc(s)}</bdi>`;                 // user text, direction isolated
+
+/* =========================================================================
+   Mock data (shapes follow GET /api/day, /api/days)
+   ========================================================================= */
+const LUNCH = "ארוחת צהריים", DINNER = "ארוחת ערב", BREAK = "ארוחה (שבירת צום)";
+let NEXT_ID = 100;
+const e = (id, time, item, quantity, net_carbs_g, calories, fat_g, protein_g, meal = null, notes = null, fasting_hours = null, source = "sheet") =>
+  ({ id, time, item, quantity, net_carbs_g, calories, fat_g, protein_g, meal, notes, fasting_hours, source });
+
+function mockEntries26() {
+  return [
+    e(59, "12:35", "קפה Bulletproof", "20 גרם חמאה + 10 גרם שמן קוקוס", 0, 233, 26.4, 0.2, null, "צום שומן (Fat Fast), פוקוס לעבודה"),
+    e(50, "16:10", "תבשיל בקר וירקות משלשום (שאריות)", "200 גרם", 5.1, 314.5, 22.8, 22.9, LUNCH, "סיום שאריות התבשיל מ-24/09", 20.2),
+    e(51, "16:10", "מיקס עלים ירוקים", "60 גרם", 1.3, 14, 0.2, 1.3, LUNCH),
+    e(52, "16:12", "שמן זית", "15 גרם", 0, 132.6, 15, 0, LUNCH, "על הסלט"),
+    e(53, "16:15", "אבוקדו", "100 גרם", 1.8, 160, 14.7, 2, LUNCH),
+    e(54, "18:00", "טבליית אלקטרוליטים Refuel", "1 טבליה", 0.6, 5, 0, 0, null, null, null, "mcp"),
+    e(55, "21:30", "ביצים", "3 יחידות", 1.2, 215, 15, 18.8, DINNER),
+    e(56, "21:30", "בייקון", "150 גרם", 0, 400.5, 34.5, 22.5, DINNER, "לפי תווית (267 קק\"ל, 23 שומן, 15 חלבון)"),
+    e(57, "21:40", "גבינת שמנת", "40 גרם", 1.3, 138, 13.6, 2.4, DINNER),
+    e(60, "21:45", "טחינה גולמית", "30 גרם", 5.0, 190, 17, 5.4, DINNER),
+    e(58, "22:30", "אגוזי פקאן", "20 גרם", 1.0, 138.4, 14.4, 1.8, DINNER, "חצאי פקאן טבעיים, סיום אכילה / תחילת צום"),
+  ];
+}
+function mockHebrewEntries() {
+  return [
+    e(71, "11:05", "שייק חלבון Isopure Zero Carb עם חלב שקדים לא ממותק וקרח", "30 גרם אבקה + 250 מ״ל חלב שקדים", 0.4, 145, 3, 26, BREAK, "אחרי אימון כוח של 45 דקות, שבירת צום של 18.5 שעות", 18.5),
+    e(72, "11:20", "חביתה משלוש ביצים עם גבינת פטה בולגרית 5% ועירית קצוצה", "3 ביצים + 40 גרם פטה", 1.6, 330, 25, 24, BREAK, "טוגן בחמאה (10 גרם), הערכים כוללים את החמאה"),
+    e(73, "15:40", "סלט ירוקים עם אבוקדו, זרעי דלעת קלויים, שמן זית כתית מעולה ומיץ לימון סחוט טרי", "קערה גדולה (בערך 350 גרם)", 6.8, 520, 46, 11, LUNCH, "הזמנה מהמסעדה ליד המשרד, ביקשתי בלי קרוטונים ובלי רוטב בלסמי. בפעם הבאה להוסיף ביצה קשה"),
+    e(74, "20:15", "קציצות בקר ביתיות ברוטב עגבניות (מתכון של אמא, בלי פירורי לחם)", "4 קציצות, בערך 220 גרם", 4.9, 480, 34, 36, DINNER, "רוטב עגבניות מרוכז ביתי, 2 כפות. אולי לשקול כמות קטנה יותר של רוטב", null, "mcp"),
+  ];
+}
+
+/* Past items for chips and the suggestion list (server: most-logged in last 30 days). */
+const LIBRARY = [
+  { item: "אגוזי פקאן", quantity: "20 גרם", net_carbs_g: 1, calories: 138.4, fat_g: 14.4, protein_g: 1.8, last: "26/09/2026" },
+  { item: "חמאת בוטנים טבעית", quantity: "30 גרם", net_carbs_g: 1.8, calories: 188, fat_g: 16, protein_g: 7.6, last: "24/09/2026" },
+  { item: "שמן זית", quantity: "15 גרם", net_carbs_g: 0, calories: 132.6, fat_g: 15, protein_g: 0, last: "26/09/2026" },
+  { item: "אבוקדו", quantity: "100 גרם", net_carbs_g: 1.8, calories: 160, fat_g: 14.7, protein_g: 2, last: "26/09/2026" },
+  { item: "טבליית אלקטרוליטים Refuel", quantity: "1 טבליה", net_carbs_g: 0.6, calories: 5, fat_g: 0, protein_g: 0, last: "26/09/2026" },
+  { item: "בייקון", quantity: "150 גרם", net_carbs_g: 0, calories: 400.5, fat_g: 34.5, protein_g: 22.5, last: "26/09/2026" },
+  { item: "טחינה גולמית", quantity: "20 גרם", net_carbs_g: 3.5, calories: 127, fat_g: 11.3, protein_g: 3.6, last: "26/09/2026" },
+  { item: "מיקס עלים ירוקים", quantity: "60 גרם", net_carbs_g: 1.3, calories: 14, fat_g: 0.2, protein_g: 1.3, last: "26/09/2026" },
+  { item: "אגוזי מקדמיה", quantity: "25 גרם", net_carbs_g: 1.3, calories: 180, fat_g: 19, protein_g: 2, last: "19/09/2026" },
+];
+const MEALS = [LUNCH, DINNER, BREAK];
+
+/* Days before the viewed one, for the 7-day strip (net carbs only). */
+const HISTORY = { "20/09/2026": 12.4, "21/09/2026": 16.9, "22/09/2026": 19.8, "23/09/2026": 20.2, "24/09/2026": 15.8, "25/09/2026": 20.1 };
+const WEIGHTS = Array.from({ length: 30 }, (_, i) => ({ date: addDays("26/09/2026", i - 29), weight_kg: Math.round((84.6 - i * 0.075 + Math.sin(i * 1.3) * 0.25) * 10) / 10 }));
+WEIGHTS[28].weight_kg = 82.7; WEIGHTS[29].weight_kg = 82.4;
+
+function baseState() {
+  return {
+    date: "26/09/2026",
+    days: {
+      "26/09/2026": {
+        goal: 20, goal_source: "inherited", entries: mockEntries26(),
+        body: { weight_kg: 82.4, ketones_mmol: 1.8, glucose_mmol: 4.9, water_ml: 250 },
+      },
+    },
+    fasts: [{ id: 3, start_at: "2026-09-25T20:00", end_at: "2026-09-26T16:10", notes: null }],
+    activeFast: { id: 4, start_at: "2026-09-26T22:30", notes: null },
+    fastTarget: 16,
+    ui: { sheet: null, expanded: null, editingId: null, goalEdit: false, fastEditId: null, toast: null, copyIds: [], open: { week: false, fast: false, body: false } },
+    form: blankForm(),
+  };
+}
+function blankForm() {
+  const n = now();
+  return { item: "", quantity: "", weight: "", base: null, net_carbs_g: "", calories: "", fat_g: "", protein_g: "", date: "", time: hm(n), meal: "", fasting_hours: "", notes: "", calc: { total: "", fiber: "", sa: "" }, suggest: false };
+}
+
+/* Prototype states — each one mutates a fresh base state. */
+const STATES = {
+  normal() {},
+  notfasting(s) { s.activeFast = null; },
+  over(s) {
+    s.activeFast = null;
+    day(s).entries.push(e(61, "22:10", "חמאת בוטנים טבעית", "2 כפות גדושות", 6.1, 250, 21, 9, DINNER, "קצת יותר מדי"));
+  },
+  empty(s) { s.date = "27/09/2026"; s.activeFast = null; s.fasts = []; },
+  add(s) {
+    s.ui.sheet = "add";
+    pickItem(s, LIBRARY[0]);
+    setWeight(s, 30);
+  },
+  edit(s) { s.ui.expanded = 56; startEdit(s, 56); },
+  copy(s) { s.ui.sheet = "copy"; s.ui.copyIds = day(s).entries.filter(x => x.meal === DINNER).map(x => x.id); s.ui.copyTarget = "27/09/2026"; },
+  toast(s) { s.ui.toast = { msg: "Added אגוזי פקאן · 1 g", sticky: true, undo: () => {} }; },
+  hebrew(s) {
+    const d = day(s); d.entries = mockHebrewEntries(); d.goal = 25; d.goal_source = "set";
+    s.ui.expanded = 73;
+  },
+};
+
+let S = baseState();
+const day = (s = S) => (s.days[s.date] ||= { goal: inheritedGoal(s, s.date), goal_source: "inherited", entries: [], body: null });
+function inheritedGoal(s, date) { return 20; }   // server resolves this from the nearest earlier day
+
+/* =========================================================================
+   Derived numbers
+   ========================================================================= */
+function totals(entries) {
+  const t = { net_carbs_g: 0, calories: 0, fat_g: 0, protein_g: 0 };
+  for (const x of entries) for (const k in t) t[k] += +x[k] || 0;
+  return t;
+}
+const sorted = entries => [...entries].sort((a, b) => a.time.localeCompare(b.time) || a.id - b.id);
+function eatingWindow(entries) {
+  if (!entries.length) return null;
+  const s = sorted(entries), a = s[0].time, b = s[s.length - 1].time;
+  const mins = (+b.slice(0, 2) * 60 + +b.slice(3)) - (+a.slice(0, 2) * 60 + +a.slice(3));
+  return { from: a, to: b, mins };
+}
+const fastHours = f => ((f.end_at ? Date.parse(f.end_at + "+02:00") : now().getTime()) - Date.parse(f.start_at + "+02:00")) / 3.6e6;
+const fmtAt = iso => `${isoToDmy(iso.slice(0, 10)).slice(0, 5)} ${iso.slice(11, 16)}`;
+
+function weekStrip() {
+  const cols = [];
+  for (let i = 6; i >= 0; i--) {
+    const date = addDays(S.date, -i);
+    const d = S.days[date];
+    const carbs = d ? (d.entries.length ? totals(d.entries).net_carbs_g : null) : (HISTORY[date] ?? null);
+    cols.push({ date, carbs, goal: d?.goal ?? 20 });
+  }
+  const logged = cols.filter(c => c.carbs != null);
+  const within = logged.filter(c => c.carbs <= c.goal);
+  let run = 0, best = 0, current = 0;
+  for (const c of cols) { run = c.carbs != null && c.carbs <= c.goal ? run + 1 : 0; best = Math.max(best, run); }
+  for (let i = cols.length - 1; i >= 0 && cols[i].carbs != null && cols[i].carbs <= cols[i].goal; i--) current++;
+  const avg = logged.length ? logged.reduce((a, c) => a + c.carbs, 0) / logged.length : 0;
+  return { cols, avg, within: within.length, logged: logged.length, current, best };
+}
+function gki(b) { return b?.ketones_mmol && b?.glucose_mmol ? b.glucose_mmol / b.ketones_mmol : null; }
+function gkiBand(v) { return v == null ? "" : v < 1 ? "therapeutic" : v < 3 ? "deep ketosis" : v < 6 ? "moderate ketosis" : v < 9 ? "light ketosis" : "not in ketosis"; }
+
+/* =========================================================================
+   Renderers — each returns HTML for one region; paint() puts it in place.
+   ========================================================================= */
+function paint(id, html) { document.getElementById(id).innerHTML = html; }
+
+function render() {
+  const d = day();
+  paint("nav", renderNav());
+  document.getElementById("glance").className = "glance " + (totals(d.entries).net_carbs_g > d.goal ? "is-over" : "is-under");
+  paint("glance", renderHero(d) + renderGoal(d) + renderFacts(d) + renderFastStrip(d));
+  paint("quick", renderQuickLog());
+  paint("log", renderEntries(d));
+  paint("more", renderWeek(d) + renderFasting() + renderBody(d));
+  paint("pinbar", renderPinbar(d));
+  paint("sheet", renderSheet(d));
+  paint("toast", renderToast());
+}
+
+function renderNav() {
+  const isToday = S.date === today();
+  return `
+    <button type="button" class="icon-btn" data-act="day" data-n="-1" aria-label="Previous day">&lsaquo;</button>
+    <h1><span class="num">${S.date}</span><small>${weekday(S.date, "long")}</small></h1>
+    <button type="button" class="icon-btn" data-act="day" data-n="1" aria-label="Next day">&rsaquo;</button>
+    <button type="button" class="btn" data-act="today" ${isToday ? "disabled" : ""}>Today</button>`;
+}
+
+function renderHero(d) {
+  const c = totals(d.entries).net_carbs_g, over = c > d.goal;
+  const pct = Math.min(c / d.goal, 1) * 100;
+  return `
+    <p class="eyebrow net-label">Net carbs</p>
+    <p class="hero">
+      <span><span class="hero-num num">${g(c)}</span><span class="hero-goal">/ ${g(d.goal)} g</span></span>
+      <span class="hero-left tone"><b class="num">${g(Math.abs(d.goal - c))} g</b><span class="eyebrow">${over ? "over goal" : "remaining"}</span></span>
+    </p>
+    <div class="meter" aria-hidden="true"><i style="width:${pct}%"></i></div>`;
+}
+
+function renderGoal(d) {
+  if (S.ui.goalEdit) return `
+    <form class="goal-edit" data-form="goal">
+      <label class="field">Goal for ${S.date.slice(0, 5)}, g<input name="goal" inputmode="decimal" value="${g(d.goal)}" required></label>
+      <button class="btn btn-primary">Save</button>
+      ${d.goal_source === "set" ? `<button type="button" class="btn" data-act="goal-inherit">Use carried-over goal</button>` : ""}
+      <button type="button" class="link" data-act="goal-cancel">Cancel</button>
+    </form>`;
+  const src = { set: "set for this day", inherited: "carried over", default: "default" }[d.goal_source];
+  return `<p class="goal">Goal ${g(d.goal)} g, ${src}<button type="button" class="link" data-act="goal-edit">Change</button></p>`;
+}
+
+function renderFacts(d) {
+  if (!d.entries.length) return "";
+  const t = totals(d.entries), k = t.calories || 1;
+  const pc = x => Math.round(x / k * 100) + "%";
+  const w = eatingWindow(d.entries);
+  const fasted = sorted(d.entries).find(x => x.fasting_hours)?.fasting_hours;
+  return `
+    <p class="facts num"><span>${kcal(t.calories)} kcal</span> · <span>fat ${Math.round(t.fat_g)} g (${pc(t.fat_g * 9)})</span> · <span>protein ${Math.round(t.protein_g)} g (${pc(t.protein_g * 4)})</span> · <span>carbs (${pc(t.net_carbs_g * 4)})</span></p>
+    <p class="facts num"><span>Eating ${w.from}–${w.to} (${Math.floor(w.mins / 60)} h ${w.mins % 60} m)</span>${fasted ? ` · <span>${g(fasted)} h fasting</span>` : ""}</p>`;
+}
+
+function renderFastStrip(d) {
+  const f = S.activeFast;
+  if (!f) {
+    const last = d.entries.length ? sorted(d.entries).at(-1).time : null;
+    return `<div class="fast off"><span>Not fasting${last ? ` · last food ${last}` : ""}</span><button type="button" class="btn" data-act="fast-start">Start fast</button></div>`;
+  }
+  const h = fastHours(f), target = S.fastTarget;
+  const pct = target ? Math.min(h / target, 1) * 100 : 0;
+  const left = target ? (h < target ? `${dur(target - h)} to ${target} h` : `${target} h reached ${dur(h - target).replace(/^0 h /, "")} ago`) : "no target";
+  return `
+    <div class="fast on" aria-live="off">
+      <span class="fast-now"><span class="eyebrow">Fasting</span><span class="fast-time num">${dur(h)}</span></span>
+      <button type="button" class="btn" data-act="fast-stop">Stop fast</button>
+      ${target ? `<div class="meter thin ink" aria-hidden="true"><i style="width:${pct}%"></i></div>` : ""}
+      <div class="fast-meta num"><span>since ${fmtAt(f.start_at)}</span><span>${left}</span></div>
+    </div>`;
+}
+
+function renderQuickLog() {
+  const chips = LIBRARY.slice(0, 8).map((x, i) =>
+    `<button type="button" class="chip" data-act="quick" data-i="${i}" aria-label="Log ${esc(x.item)}, ${g(x.net_carbs_g)} g net carbs">${ut(x.item)}<span class="num">${g(x.net_carbs_g)} g</span></button>`).join("");
+  return `<div class="sec-h"><h2>Log again</h2></div><div class="chips">${chips}</div>`;
+}
+
+function renderEntries(d) {
+  if (!d.entries.length) return `<div class="sec-h"><h2>Log</h2></div><p class="empty">No entries.</p>`;
+  const groups = [];
+  for (const x of sorted(d.entries)) {
+    const last = groups.at(-1);
+    if (last && last.meal === x.meal) last.rows.push(x); else groups.push({ meal: x.meal, rows: [x] });
+  }
+  const body = groups.map(gr => (gr.meal ? `
+    <div class="meal-h">
+      <h3 dir="auto">${esc(gr.meal)}</h3>
+      <span class="num">${g(totals(gr.rows).net_carbs_g)} g</span>
+      <button type="button" class="link" data-act="copy-meal" data-meal="${esc(gr.meal)}">Copy</button>
+    </div>` : "") + `<ul class="rows">${gr.rows.map(renderRow).join("")}</ul>`).join("");
+  return `
+    <div class="sec-h"><h2>Log<span class="log-count">${d.entries.length} entries</span></h2>
+      <button type="button" class="link" data-act="copy-open">Copy entries to another day</button></div>
+    ${body}`;
+}
+
+function renderRow(x) {
+  const open = S.ui.expanded === x.id, editing = S.ui.editingId === x.id;
+  const macros = [`${kcal(x.calories)} kcal`, `F ${g(x.fat_g)}`, `P ${g(x.protein_g)}`, x.fasting_hours ? `${g(x.fasting_hours)} h fast` : ""].filter(Boolean).join(" · ");
+  return `
+    <li class="row${open ? " open" : ""}${editing ? " editing" : ""}">
+      <button type="button" class="row-main" data-act="expand" data-id="${x.id}" aria-expanded="${open}">
+        <span class="t num">${x.time}${x.fasting_hours ? `<span class="brk">ends fast</span>` : ""}</span>
+        <span><span class="it" dir="auto">${esc(x.item)}</span><span class="q" dir="auto">${esc(x.quantity)}</span></span>
+        <span class="c num">${g(x.net_carbs_g)}<small> g</small></span>
+      </button>
+      ${open || editing ? `
+      <div class="row-more">
+        ${editing ? `<p class="tag">Editing below</p>` : ""}
+        ${x.notes ? `<p class="notes" dir="auto">${esc(x.notes)}</p>` : ""}
+        <p class="num">${macros}${x.source === "mcp" ? ` · <span class="muted">added by agent</span>` : ""}</p>
+        <div class="row-btns">
+          <button type="button" class="btn" data-act="edit" data-id="${x.id}">Edit</button>
+          <button type="button" class="btn" data-act="log-again" data-id="${x.id}">Log again now</button>
+          <button type="button" class="btn btn-danger" data-act="delete" data-id="${x.id}">Delete</button>
+        </div>
+      </div>` : ""}
+    </li>`;
+}
+
+function renderWeek(d) {
+  const w = weekStrip();
+  const max = Math.max(...w.cols.map(c => Math.max(c.carbs ?? 0, c.goal * 1.25)));
+  const cols = w.cols.map(c => {
+    const over = c.carbs != null && c.carbs > c.goal, none = c.carbs == null;
+    const label = `${weekday(c.date, "short").slice(0, 2)} ${c.date.slice(0, 2)}`;
+    const sr = `${weekday(c.date, "long")} ${c.date}: ${none ? "no entries" : `${g(c.carbs)} g${over ? ", over goal" : ""}`}`;
+    return `<button type="button" class="day${c.date === S.date ? " cur" : ""}${over ? " over" : ""}${none ? " none" : ""}" data-act="goto" data-date="${c.date}" aria-label="${sr}"${c.date === S.date ? ' aria-current="date"' : ""}>
+      <span class="v num" aria-hidden="true">${none ? "–" : g(c.carbs)}</span>
+      <span class="plot" aria-hidden="true"><i style="height:${(c.carbs ?? 0) / max * 100}%"></i><b style="bottom:${c.goal / max * 100}%"></b></span>
+      <span class="lbl" aria-hidden="true">${label}</span></button>`;
+  }).join("");
+  return `
+    <details data-sec="week"${S.ui.open.week ? " open" : ""}>
+      <summary><span class="eyebrow">Week</span><span class="sum num">avg ${g(w.avg)} g · ${w.within} of ${w.logged} within goal</span></summary>
+      <div class="panel">
+        <div class="week">${cols}</div>
+        <p class="muted num">7-day avg ${g(w.avg)} g · ${w.within} of ${w.logged} days within goal · streak ${w.current} day${w.current === 1 ? "" : "s"}, best ${w.best}</p>
+      </div>
+    </details>`;
+}
+
+function renderFasting() {
+  const f = S.activeFast;
+  const ended = S.fasts.filter(x => isoToDmy(x.end_at.slice(0, 10)) === S.date);
+  const list = [...(f ? [f] : []), ...ended].map(x => {
+    const h = fastHours(x);
+    const text = x.end_at ? `${g(h)} h fast · ${fmtAt(x.start_at)} → ${fmtAt(x.end_at)}` : `Running · ${dur(h)} since ${fmtAt(x.start_at)}`;
+    const editing = S.ui.fastEditId === x.id;
+    return `<li><span class="num">${text}${x.notes ? ` · ${ut(x.notes)}` : ""}</span>
+      <button type="button" class="btn" data-act="fast-edit" data-id="${x.id}" aria-expanded="${editing}">Edit</button>
+      <button type="button" class="btn btn-danger" data-act="fast-delete" data-id="${x.id}">Delete</button>
+      ${editing ? `<form class="fast-edit" data-form="fast" data-id="${x.id}">
+        <div class="grid2">
+          <label class="field">Start<input type="datetime-local" name="start" value="${x.start_at}" required></label>
+          <label class="field">End<input type="datetime-local" name="end" value="${x.end_at ?? ""}"></label>
+        </div>
+        <label class="field">Notes<input name="notes" dir="auto" value="${esc(x.notes ?? "")}"></label>
+        <div class="row-btns"><button class="btn btn-primary">Save</button><button type="button" class="link" data-act="fast-edit" data-id="${x.id}">Cancel</button></div>
+      </form>` : ""}</li>`;
+  }).join("");
+  const targets = [0, 12, 14, 16, 18, 20, 24].map(t => `<option value="${t}"${t === S.fastTarget ? " selected" : ""}>${t ? t + " h" : "None"}</option>`).join("");
+  const sum = f ? `${dur(fastHours(f))} · target ${S.fastTarget ? S.fastTarget + " h" : "none"}` : ended.length ? `last ${g(fastHours(ended.at(-1)))} h` : "not fasting";
+  return `
+    <details data-sec="fast"${S.ui.open.fast ? " open" : ""}>
+      <summary><span class="eyebrow">Fasting</span><span class="sum num">${sum}</span></summary>
+      <form class="panel" data-form="fast-toggle">
+        <div class="grid2">
+          <label class="field">${f ? "Stopped at" : "Started at"}<input type="datetime-local" name="at" value="${isoLocal(now())}"></label>
+          <label class="field">Target<select name="target" data-act-change="target">${targets}</select></label>
+        </div>
+        <div class="row-btns"><button class="btn btn-primary">${f ? "Stop fasting" : "Start fasting"}</button></div>
+        ${list ? `<ul class="fasts">${list}</ul>` : ""}
+      </form>
+    </details>`;
+}
+
+function renderBody(d) {
+  const b = d.body;
+  const v = gki(b);
+  const sum = b ? [b.weight_kg && `${g(b.weight_kg)} kg`, b.ketones_mmol && `ketones ${g(b.ketones_mmol)}`, b.glucose_mmol && `glucose ${g(b.glucose_mmol)}`, v && `GKI ${g(v)}`, b.water_ml && `${b.water_ml} ml water`].filter(Boolean).join(" · ") : "no readings";
+  const prev = WEIGHTS.filter(w => dmyToDate(w.date) < dmyToDate(S.date)).at(-1);
+  const delta = b?.weight_kg && prev ? b.weight_kg - prev.weight_kg : null;
+  const ws = WEIGHTS.slice(-30), lo = Math.min(...ws.map(w => w.weight_kg)) - .2, hi = Math.max(...ws.map(w => w.weight_kg)) + .2;
+  const pts = ws.map((w, i) => `${(i / (ws.length - 1) * 100).toFixed(2)},${((hi - w.weight_kg) / (hi - lo) * 40 + 4).toFixed(2)}`);
+  return `
+    <details data-sec="body"${S.ui.open.body ? " open" : ""}>
+      <summary><span class="eyebrow">Body</span><span class="sum num">${sum}</span></summary>
+      <div class="panel">
+        <form class="grid3" data-form="body">
+          <label class="field">Weight, kg<input name="weight_kg" inputmode="decimal" value="${b?.weight_kg ?? ""}"></label>
+          <label class="field">Ketones, mmol/L<input name="ketones_mmol" inputmode="decimal" value="${b?.ketones_mmol ?? ""}"></label>
+          <label class="field">Glucose, mmol/L<input name="glucose_mmol" inputmode="decimal" value="${b?.glucose_mmol ?? ""}"></label>
+          <div class="row-btns" style="grid-column:1/-1"><button class="btn btn-primary">Save readings</button></div>
+        </form>
+        ${delta != null || v ? `<p class="num">${delta != null ? `${delta > 0 ? "+" : "−"}${g(Math.abs(delta))} kg since ${prev.date.slice(0, 5)}` : ""}${delta != null && v ? " · " : ""}${v ? `GKI ${g(v)}, ${gkiBand(v)}` : ""}</p>` : ""}
+        <div>
+          <svg class="spark" viewBox="0 0 100 48" preserveAspectRatio="none" role="img" aria-label="Weight, last 30 days: ${ws[0].weight_kg} to ${ws.at(-1).weight_kg} kg"><polyline points="${pts.join(" ")}"/></svg>
+          <p class="muted num" style="display:flex;justify-content:space-between"><span>${ws[0].date.slice(0, 5)} · ${g(ws[0].weight_kg)} kg</span><span>30 days</span><span>${g(ws.at(-1).weight_kg)} kg</span></p>
+        </div>
+        <div class="water">
+          <p class="num">Water <b>${b?.water_ml ?? 0} ml</b></p>
+          <button type="button" class="btn" data-act="water" data-ml="250">+250</button>
+          <button type="button" class="btn" data-act="water" data-ml="500">+500</button>
+          <button type="button" class="btn" data-act="water" data-ml="-250" aria-label="Remove 250 ml">−250</button>
+        </div>
+      </div>
+    </details>`;
+}
+
+function renderPinbar(d) {
+  if (S.ui.sheet) return "";
+  const c = totals(d.entries).net_carbs_g, over = c > d.goal;
+  return `<div class="pinbar-in">
+    <span class="left tone${over ? " over" : ""}"><b class="num">${g(Math.abs(d.goal - c))} g</b>${over ? "over" : "left"}</span>
+    <button type="button" class="btn btn-primary" data-act="open-add">Add food</button></div>`;
+}
+
+function renderSheet(d) {
+  if (!S.ui.sheet) return "";
+  const inner = S.ui.sheet === "copy" ? renderCopyPanel(d) : renderAddForm(d);
+  return `<div class="scrim" data-act="close-sheet"></div>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title"><div class="grab" aria-hidden="true"></div>${inner}</div>`;
+}
+
+function renderAddForm(d) {
+  const f = S.form, editing = S.ui.sheet === "edit";
+  const editItem = editing && d.entries.find(x => x.id === S.ui.editingId);
+  const title = editing ? `Editing: ${ut(editItem.item)}` : `Add food <span class="muted num" style="font-weight:400;font-size:var(--t-sm)">to ${S.date.slice(0, 5)}</span>`;
+  const base = f.base;
+  const portions = base ? [0.5, 1, 1.5, 2].map(p => `<button type="button" class="btn" data-act="portion" data-p="${p}" aria-pressed="${+f.weight === Math.round(base.weight * p)}">×${{ 0.5: "½", 1: "1", 1.5: "1½", 2: "2" }[p]}</button>`).join("") : "";
+  return `
+    <div class="sheet-h"><h2 id="sheet-title">${title}</h2><button type="button" class="icon-btn" data-act="close-sheet" aria-label="Close">&times;</button></div>
+    <form class="form" data-form="entry" autocomplete="off">
+      <div class="item-wrap">
+        <label class="field">Item<input name="item" dir="auto" value="${esc(f.item)}" required role="combobox" aria-expanded="${f.suggest}" aria-controls="sugg" enterkeyhint="done"></label>
+        <ul class="sugg" id="sugg" role="listbox"${f.suggest ? "" : " hidden"}>${renderSuggestions()}</ul>
+      </div>
+      <label class="field">Quantity<input name="quantity" dir="auto" value="${esc(f.quantity)}"></label>
+      ${base ? `
+      <div class="weight">
+        <label class="field">Weight, g<input name="weight" inputmode="decimal" value="${f.weight}"></label>
+        <div class="portions" role="group" aria-label="Portion">${portions}</div>
+        <p class="was num">was ${g(base.weight)} g · scales quantity and all four numbers</p>
+      </div>` : ""}
+      <div class="grid2">
+        <label class="field key">Net carbs, g<input name="net_carbs_g" inputmode="decimal" value="${f.net_carbs_g}" required></label>
+        <label class="field">Calories<input name="calories" inputmode="decimal" value="${f.calories}"></label>
+        <label class="field">Fat, g<input name="fat_g" inputmode="decimal" value="${f.fat_g}"></label>
+        <label class="field">Protein, g<input name="protein_g" inputmode="decimal" value="${f.protein_g}"></label>
+      </div>
+      <p class="preview num" id="preview">${renderPreview(d)}</p>
+      <details>
+        <summary><b>More</b><span class="sum num" id="more-sum">${renderMoreSummary()}</span></summary>
+        <div class="inner">
+          <div class="grid2">
+            <label class="field">Date<input type="date" name="date" value="${dmyToIso(f.date || S.date)}"></label>
+            <label class="field">Time<input type="time" name="time" value="${f.time}"></label>
+            <label class="field">Meal<input name="meal" dir="auto" list="meals" value="${esc(f.meal)}"></label>
+            <label class="field">Fasting hours<input name="fasting_hours" inputmode="decimal" value="${f.fasting_hours}"></label>
+          </div>
+          <datalist id="meals">${MEALS.map(m => `<option value="${esc(m)}"></option>`).join("")}</datalist>
+          <label class="field">Notes<textarea name="notes" dir="auto" rows="2">${esc(f.notes)}</textarea></label>
+          <fieldset class="calc">
+            <legend>Net carbs from a label</legend>
+            <div class="grid3">
+              <label class="field">Total carbs<input name="calc_total" inputmode="decimal"></label>
+              <label class="field">− Fiber<input name="calc_fiber" inputmode="decimal"></label>
+              <label class="field">− Sugar alcohols<input name="calc_sa" inputmode="decimal"></label>
+            </div>
+            <div class="row-btns"><span class="num" id="calc-out">= – g</span><button type="button" class="btn" data-act="calc-use">Use as net carbs</button></div>
+          </fieldset>
+        </div>
+      </details>
+      <div class="sheet-actions">
+        ${editing ? `<button type="button" class="btn" data-act="close-sheet">Cancel</button>` : ""}
+        <button class="btn btn-primary">${editing ? "Save" : "Add"}</button>
+      </div>
+    </form>`;
+}
+
+function renderSuggestions() {
+  const q = S.form.item.trim();
+  const hits = LIBRARY.filter(x => !q || x.item.includes(q)).slice(0, 6);
+  return hits.map(x => `<li role="option"><button type="button" data-act="pick" data-i="${LIBRARY.indexOf(x)}">
+      <span class="it">${ut(x.item)} · ${ut(x.quantity)}</span><span class="num">${g(x.net_carbs_g)} g</span>
+      <span class="meta num">last ${x.last.slice(0, 5)}</span></button></li>`).join("");
+}
+
+function renderPreview(d) {
+  const t = totals(d.entries.filter(x => x.id !== S.ui.editingId)).net_carbs_g + (+S.form.net_carbs_g || 0);
+  const over = t > d.goal;
+  return `After this: <b>${g(t)}</b> / ${g(d.goal)} g, <span class="tone${over ? " over" : ""}">${g(Math.abs(d.goal - t))} g ${over ? "over" : "left"}</span>`;
+}
+function renderMoreSummary() {
+  const f = S.form;
+  return [(f.date || S.date).slice(0, 5), f.time, f.meal && ut(f.meal), f.fasting_hours && `${f.fasting_hours} h fast`, f.notes && "note"].filter(Boolean).join(" · ");
+}
+
+function renderCopyPanel(d) {
+  const target = S.ui.copyTarget || (S.date === today() ? addDays(S.date, 1) : today());
+  const rows = sorted(d.entries).map(x => `<li><label>
+      <input type="checkbox" name="ids" value="${x.id}"${S.ui.copyIds.includes(x.id) ? " checked" : ""}>
+      <span class="num muted">${x.time}</span><span class="it">${ut(x.item)} · ${ut(x.quantity)}</span><span class="num">${g(x.net_carbs_g)} g</span>
+    </label></li>`).join("");
+  return `
+    <div class="sheet-h"><h2 id="sheet-title">Copy entries</h2><button type="button" class="icon-btn" data-act="close-sheet" aria-label="Close">&times;</button></div>
+    <form class="form" data-form="copy">
+      <ul class="copy-list">${rows}</ul>
+      <div class="grid2">
+        <label class="field">To day<input type="date" name="target" value="${dmyToIso(target)}" required></label>
+        <label class="check" style="align-self:end"><input type="checkbox" name="keep" checked> Keep times</label>
+      </div>
+      <div class="sheet-actions">
+        <button type="button" class="btn" data-act="close-sheet">Cancel</button>
+        <button class="btn btn-primary">Copy ${S.ui.copyIds.length || ""} ${S.ui.copyIds.length === 1 ? "entry" : "entries"}</button>
+      </div>
+    </form>`;
+}
+
+function renderToast() {
+  const t = S.ui.toast;
+  if (!t) return "";
+  return `<div class="toast" role="status"><span dir="auto">${esc(t.msg)}</span>${t.undo ? `<button type="button" data-act="undo">Undo</button>` : ""}${t.action ? `<button type="button" data-act="toast-action">${t.action.label}</button>` : ""}</div>`;
+}
+
+/* =========================================================================
+   Actions (local only; each maps to one API call when re-wired)
+   ========================================================================= */
+let toastTimer;
+function toast(msg, undo, action) {
+  S.ui.toast = { msg, undo, action };
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { S.ui.toast = null; paint("toast", ""); }, 6000);
+}
+
+function pickItem(s, x) {
+  const w = parseFloat(x.quantity) && /גרם|g\b/.test(x.quantity) ? parseFloat(x.quantity) : 100;
+  Object.assign(s.form, { item: x.item, quantity: x.quantity, net_carbs_g: x.net_carbs_g, calories: x.calories, fat_g: x.fat_g, protein_g: x.protein_g, weight: w, suggest: false,
+    base: { weight: w, quantity: x.quantity, net_carbs_g: x.net_carbs_g, calories: x.calories, fat_g: x.fat_g, protein_g: x.protein_g } });
+}
+function setWeight(s, w) {
+  const b = s.form.base, r = w / b.weight;
+  const round1 = n => Math.round(n * 10) / 10;
+  Object.assign(s.form, {
+    weight: w,
+    quantity: b.quantity.replace(/\d+(\.\d+)?/g, n => String(round1(n * r))),
+    net_carbs_g: round1(b.net_carbs_g * r), calories: round1(b.calories * r), fat_g: round1(b.fat_g * r), protein_g: round1(b.protein_g * r),
+  });
+}
+function startEdit(s, id) {
+  const x = day(s).entries.find(y => y.id === id);
+  s.ui.sheet = "edit"; s.ui.editingId = id;
+  s.form = { ...blankForm(), ...x, date: s.date, meal: x.meal ?? "", notes: x.notes ?? "", fasting_hours: x.fasting_hours ?? "" };
+}
+function addEntry(d, entry) { d.entries.push(entry); return () => { d.entries = d.entries.filter(x => x !== entry); }; }
+
+document.addEventListener("click", ev => {
+  const el = ev.target.closest("[data-act]");
+  if (!el) return;
+  const act = el.dataset.act, id = +el.dataset.id, d = day();
+  switch (act) {
+    case "day": S.date = addDays(S.date, +el.dataset.n); S.ui.expanded = null; break;
+    case "today": S.date = today(); break;
+    case "goto": S.date = el.dataset.date; break;
+    case "goal-edit": S.ui.goalEdit = true; break;
+    case "goal-cancel": S.ui.goalEdit = false; break;
+    case "goal-inherit": d.goal = inheritedGoal(S, S.date); d.goal_source = "inherited"; S.ui.goalEdit = false; break;
+    case "expand": S.ui.expanded = S.ui.expanded === id ? null : id; break;
+    case "edit": startEdit(S, id); break;
+    case "delete": {
+      const x = d.entries.find(y => y.id === id);
+      d.entries = d.entries.filter(y => y !== x);
+      toast(`Deleted ${x.item}`, () => d.entries.push(x));
+      break;
+    }
+    case "log-again": case "quick": {
+      const src = act === "quick" ? LIBRARY[+el.dataset.i] : d.entries.find(y => y.id === id);
+      const entry = { ...src, id: NEXT_ID++, time: hm(now()), meal: null, notes: null, fasting_hours: null, source: "web" };
+      toast(`Added ${src.item} · ${g(src.net_carbs_g)} g`, addEntry(d, entry));
+      break;
+    }
+    case "open-add": S.ui.sheet = "add"; S.ui.editingId = null; S.form = blankForm(); break;
+    case "close-sheet": S.ui.sheet = null; S.ui.editingId = null; break;
+    case "pick": pickItem(S, LIBRARY[+el.dataset.i]); break;
+    case "portion": setWeight(S, Math.round(S.form.base.weight * +el.dataset.p)); break;
+    case "calc-use": { const out = calcNet(); if (out != null) S.form.net_carbs_g = out; break; }
+    case "copy-open": S.ui.sheet = "copy"; S.ui.copyIds = d.entries.map(x => x.id); S.ui.copyTarget = null; break;
+    case "copy-meal": S.ui.sheet = "copy"; S.ui.copyIds = d.entries.filter(x => x.meal === el.dataset.meal).map(x => x.id); S.ui.copyTarget = null; break;
+    case "fast-start": S.activeFast = { id: NEXT_ID++, start_at: isoLocal(now()), notes: null }; break;
+    case "fast-stop": stopFast(isoLocal(now())); break;
+    case "fast-edit": S.ui.fastEditId = S.ui.fastEditId === id ? null : id; break;
+    case "fast-delete":
+      if (S.activeFast?.id === id) S.activeFast = null; else S.fasts = S.fasts.filter(f => f.id !== id);
+      break;
+    case "water": d.body ||= {}; d.body.water_ml = Math.max(0, (d.body.water_ml || 0) + +el.dataset.ml); break;
+    case "undo": S.ui.toast?.undo?.(); S.ui.toast = null; break;
+    case "toast-action": { const a = S.ui.toast.action; S.ui.toast = null; a.run(); break; }
+    default: return;
+  }
+  render();
+});
+
+function stopFast(endIso) {
+  const f = { ...S.activeFast, end_at: endIso };
+  S.activeFast = null; S.fasts.push(f);
+  const h = Math.round(fastHours(f) * 10) / 10;
+  S.form = { ...blankForm(), fasting_hours: h };   // the meal that breaks it records the hours
+  toast(`Fast ended · ${g(h)} h`, () => { S.fasts.pop(); S.activeFast = { id: f.id, start_at: f.start_at, notes: f.notes }; },
+    { label: "Log meal", run: () => { S.ui.sheet = "add"; } });
+}
+
+function calcNet() {
+  const v = n => parseFloat(document.querySelector(`[name=${n}]`)?.value) || 0;
+  const total = parseFloat(document.querySelector("[name=calc_total]")?.value);
+  return isNaN(total) ? null : Math.max(0, Math.round((total - v("calc_fiber") - v("calc_sa")) * 10) / 10);
+}
+
+/* Typing: update state and the few dependent bits without re-rendering the sheet (keeps focus). */
+document.addEventListener("input", ev => {
+  const t = ev.target, form = t.form?.dataset.form;
+  if (form !== "entry") return;
+  const f = S.form;
+  if (t.name === "item") {
+    f.item = t.value; f.suggest = t.value.length > 0;
+    const ul = document.getElementById("sugg"); ul.innerHTML = renderSuggestions(); ul.hidden = !f.suggest || !ul.children.length;
+    t.setAttribute("aria-expanded", !ul.hidden);
+    return;
+  }
+  if (t.name === "weight" && f.base) {
+    setWeight(S, parseFloat(t.value) || 0);
+    for (const k of ["quantity", "net_carbs_g", "calories", "fat_g", "protein_g"]) t.form.elements[k].value = f[k];
+  } else if (t.name.startsWith("calc_")) {
+    const out = calcNet(); document.getElementById("calc-out").textContent = out == null ? "= – g" : `= ${g(out)} g`; return;
+  } else if (t.name === "date") f.date = isoToDmy(t.value);
+  else f[t.name] = t.value;
+  document.getElementById("preview").innerHTML = renderPreview(day());
+  document.getElementById("more-sum").innerHTML = renderMoreSummary();
+});
+
+document.addEventListener("change", ev => {
+  if (ev.target.dataset.actChange === "target") { S.fastTarget = +ev.target.value; render(); }   // real app: localStorage
+});
+document.addEventListener("toggle", ev => {
+  const sec = ev.target.dataset?.sec; if (sec) S.ui.open[sec] = ev.target.open;
+}, true);
+
+document.addEventListener("submit", ev => {
+  ev.preventDefault();
+  const fm = ev.target, kind = fm.dataset.form, data = new FormData(fm), d = day();
+  if (kind === "goal") { d.goal = parseFloat(data.get("goal")) || d.goal; d.goal_source = "set"; S.ui.goalEdit = false; }
+  if (kind === "body") { d.body ||= {}; for (const k of ["weight_kg", "ketones_mmol", "glucose_mmol"]) d.body[k] = parseFloat(data.get(k)) || null; }
+  if (kind === "fast-toggle") {
+    const at = data.get("at") || isoLocal(now());
+    if (S.activeFast) stopFast(at); else S.activeFast = { id: NEXT_ID++, start_at: at, notes: null };
+  }
+  if (kind === "fast") {
+    const f = S.activeFast?.id === +fm.dataset.id ? S.activeFast : S.fasts.find(x => x.id === +fm.dataset.id);
+    Object.assign(f, { start_at: data.get("start"), notes: data.get("notes") || null });
+    if (data.get("end")) f.end_at = data.get("end");
+    if (f === S.activeFast && f.end_at) { S.fasts.push(f); S.activeFast = null; }
+    S.ui.fastEditId = null;
+  }
+  if (kind === "copy") {
+    const ids = data.getAll("ids").map(Number), target = isoToDmy(data.get("target")), keep = data.get("keep");
+    const src = S.date, dest = (S.date = target, day());
+    const copies = d.entries.filter(x => ids.includes(x.id)).map(x => ({ ...x, id: NEXT_ID++, time: keep ? x.time : hm(now()) }));
+    dest.entries.push(...copies);
+    S.ui.sheet = null;
+    toast(`Copied ${copies.length} from ${src.slice(0, 5)}`, () => { dest.entries = dest.entries.filter(x => !copies.includes(x)); });
+  }
+  if (kind === "entry") {
+    const f = S.form;
+    const entry = { item: f.item.trim(), quantity: f.quantity, net_carbs_g: +f.net_carbs_g, calories: +f.calories || null, fat_g: +f.fat_g || null, protein_g: +f.protein_g || null,
+      time: f.time, meal: f.meal || null, notes: f.notes || null, fasting_hours: +f.fasting_hours || null, source: "web" };
+    const target = f.date && f.date !== S.date ? (S.days[f.date] ||= { goal: 20, goal_source: "inherited", entries: [], body: null }) : d;
+    if (S.ui.sheet === "edit") {
+      Object.assign(target.entries.find(x => x.id === S.ui.editingId), entry);
+      S.ui.sheet = null; S.ui.editingId = null;
+    } else {
+      toast(`Added ${entry.item} · ${g(entry.net_carbs_g)} g`, addEntry(target, { ...entry, id: NEXT_ID++ }));
+      S.form = { ...blankForm(), date: f.date, time: f.time, meal: f.meal };   // date, time, meal stay
+    }
+  }
+  render();
+  if (kind === "entry" && S.ui.sheet === "add") document.querySelector("[name=item]").focus();
+});
+
+document.addEventListener("keydown", ev => { if (ev.key === "Escape" && S.ui.sheet) { S.ui.sheet = null; S.ui.editingId = null; render(); } });
+
+/* Live fast clock: repaint only the glance strip. */
+setInterval(() => { if (S.activeFast) { const d = day(); paint("glance", renderHero(d) + renderGoal(d) + renderFacts(d) + renderFastStrip(d)); } }, 30000);
+
+/* Prototype switcher */
+const sel = document.getElementById("proto-state");
+function load(name) { S = baseState(); STATES[name](S); render(); }
+sel.addEventListener("change", () => load(sel.value));
+load(new URLSearchParams(location.search).get("state") || "normal");
+sel.value = new URLSearchParams(location.search).get("state") || "normal";
+</script>
+</body>
+</html>
