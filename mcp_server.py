@@ -32,11 +32,17 @@ _ENTRY_SCHEMA = {
     "additionalProperties": False,
 }
 
+_MOMENT_PROPS = {
+    "date": {"type": "string", "description": "DD/MM/YYYY. Default: today (Europe/Copenhagen)."},
+    "time": {"type": "string", "description": "HH:MM, 24h. Default: now."},
+    "notes": {"type": "string"},
+}
+
 TOOLS = [
     {
         "name": "add_entries",
         "description": "Add one or more rows to the keto log. Returns the created rows "
-                       "and the day summary (totals, goal 20 g net carbs, remaining, "
+                       "and the day summary (totals, the day's net-carb goal, remaining, "
                        "over_goal) for each touched date.",
         "inputSchema": {
             "type": "object",
@@ -46,7 +52,8 @@ TOOLS = [
     },
     {
         "name": "get_day",
-        "description": "Entries and totals for one day.",
+        "description": "Entries and totals for one day, fasts that ended that day, "
+                       "and the running fast if any.",
         "inputSchema": {
             "type": "object",
             "properties": {"date": {"type": "string", "description": "DD/MM/YYYY. Default: today."}},
@@ -58,6 +65,97 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {"n": {"type": "integer", "minimum": 1, "maximum": 60, "default": 14}},
+        },
+    },
+    {
+        "name": "update_entry",
+        "description": "Change fields of one entry by id. Omitted fields keep their value; "
+                       "null clears an optional field. Returns the row and the day summary "
+                       "for the old and new date.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"id": {"type": "integer"}, **_ENTRY_SCHEMA["properties"]},
+            "required": ["id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "delete_entry",
+        "description": "Delete one entry by id. Returns the deleted row and the day summary.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"id": {"type": "integer"}},
+            "required": ["id"],
+        },
+    },
+    {
+        "name": "start_fast",
+        "description": "Start a fast. Fails if one is already running.",
+        "inputSchema": {"type": "object", "properties": _MOMENT_PROPS, "additionalProperties": False},
+    },
+    {
+        "name": "stop_fast",
+        "description": "Stop the running fast. Returns it with its length in hours.",
+        "inputSchema": {"type": "object", "properties": _MOMENT_PROPS, "additionalProperties": False},
+    },
+    {
+        "name": "update_fast",
+        "description": "Change a fast's start, end or notes by id. Clearing both end fields "
+                       "reopens it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer"},
+                "start_date": {"type": "string", "description": "DD/MM/YYYY"},
+                "start_time": {"type": "string", "description": "HH:MM"},
+                "end_date": {"type": ["string", "null"], "description": "DD/MM/YYYY"},
+                "end_time": {"type": ["string", "null"], "description": "HH:MM"},
+                "notes": {"type": ["string", "null"]},
+            },
+            "required": ["id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "set_goal",
+        "description": "Set the net-carb goal for one day (default 20 g). Later days that "
+                       "have no entries yet carry it over; days already started keep theirs. "
+                       "null resets the day to the goal carried over from before.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "DD/MM/YYYY. Default: today."},
+                "net_carbs_goal": {"type": ["number", "null"], "exclusiveMinimum": 0},
+            },
+            "required": ["net_carbs_goal"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "log_body",
+        "description": "Set body readings for one day: weight_kg, ketones_mmol, glucose_mmol "
+                       "(mmol/L), water_ml; or add_water_ml to add water. Omitted fields are "
+                       "unchanged, null clears one. Returns the readings with GKI and weight change.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "DD/MM/YYYY. Default: today."},
+                "weight_kg": {"type": ["number", "null"]},
+                "ketones_mmol": {"type": ["number", "null"]},
+                "glucose_mmol": {"type": ["number", "null"]},
+                "water_ml": {"type": ["number", "null"]},
+                "add_water_ml": {"type": "number"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "delete_fast",
+        "description": "Delete one fast by id.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"id": {"type": "integer"}},
+            "required": ["id"],
         },
     },
 ]
@@ -140,6 +238,26 @@ def call_tool(name, args):
         return db.get_day(args.get("date"))
     if name == "recent_days":
         return db.recent_days(args.get("n"))
+    if name == "update_entry":
+        changes = {k: v for k, v in args.items() if k != "id"}
+        row, days = db.update_entry(args.get("id"), changes)
+        return {"entry": row, "days": days}
+    if name == "delete_entry":
+        row, day = db.delete_entry(args.get("id"))
+        return {"deleted": row, "day": day}
+    if name == "start_fast":
+        return {"fast": db.start_fast(args, source="mcp")}
+    if name == "stop_fast":
+        return {"fast": db.stop_fast(args)}
+    if name == "update_fast":
+        changes = {k: v for k, v in args.items() if k != "id"}
+        return {"fast": db.update_fast(args.get("id"), changes)}
+    if name == "log_body":
+        return db.log_body(args)
+    if name == "set_goal":
+        return db.set_goal(args)
+    if name == "delete_fast":
+        return {"deleted": db.delete_fast(args.get("id"))}
     raise RPCError(-32602, f"unknown tool: {name}")
 
 

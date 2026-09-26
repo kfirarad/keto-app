@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sys
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,6 +20,10 @@ STATIC_FILES = {
     "/static/app.css": ("app.css", "text/css; charset=utf-8"),
     "/static/app.js": ("app.js", "text/javascript; charset=utf-8"),
 }
+
+
+ENTRY_PATH = re.compile(r"^/api/entries/(\d+)$")
+FAST_PATH = re.compile(r"^/api/fasts/(\d+)$")
 
 
 class HTTPError(Exception):
@@ -50,6 +55,10 @@ class Handler(BaseHTTPRequestHandler):
             fn()
         except HTTPError as e:
             self._json(e.status, {"error": e.message})
+        except db.NotFoundError as e:
+            self._json(404, {"error": str(e)})
+        except db.ConflictError as e:
+            self._json(409, {"error": str(e)})
         except db.ValidationError as e:
             self._json(400, {"error": str(e)})
         except Exception:
@@ -65,10 +74,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         self._dispatch(self._post)
 
+    def do_PATCH(self):
+        self._dispatch(self._patch)
+
+    def do_DELETE(self):
+        self._dispatch(self._delete)
+
     def do_PUT(self):
         self._dispatch(self._not_allowed)
-
-    do_DELETE = do_PATCH = do_PUT
 
     def _not_allowed(self):
         raise HTTPError(405, f"method {self.command} not allowed")
@@ -84,17 +97,78 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, db.get_day(qs.get("date", [None])[0]))
         elif url.path == "/api/recent":
             self._json(200, db.recent_days(qs.get("n", [None])[0]))
-        elif url.path == "/api/entries":
-            raise HTTPError(405, "use POST for /api/entries")
+        elif url.path == "/api/foods":
+            top = qs.get("top", [None])[0]
+            self._json(200, db.recent_foods() if top is None else db.frequent_foods(top))
+        elif url.path == "/api/days":
+            self._json(200, db.days_overview(qs.get("end", [None])[0], qs.get("n", [None])[0]))
+        elif url.path == "/api/export.csv":
+            table = qs.get("table", ["entries"])[0]
+            body = ("\ufeff" + db.export_csv(table)).encode("utf-8")  # BOM so Excel reads Hebrew
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="keto-{table}.csv"')
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+        elif url.path == "/api/meals":
+            self._json(200, db.meal_names())
+        elif url.path == "/api/entries" or ENTRY_PATH.match(url.path) or url.path.startswith("/api/fasts") or url.path in ("/api/goal", "/api/body"):
+            raise HTTPError(405, f"GET not allowed on {url.path}")
         else:
             raise HTTPError(404, f"not found: {url.path}")
 
     def _post(self):
-        url = urlparse(self.path)
-        if url.path != "/api/entries":
-            if url.path in STATIC_FILES or url.path.startswith("/api/"):
-                raise HTTPError(405, f"POST not allowed on {url.path}")
-            raise HTTPError(404, f"not found: {url.path}")
+        path = urlparse(self.path).path
+        if path == "/api/entries":
+            created, days = db.add_entries(self._read_json(), source="ui")
+            first_date = created[0]["date"]
+            self._json(201, {"created": created, "day": days[first_date], "days": days})
+        elif path == "/api/fasts/start":
+            self._json(201, {"fast": db.start_fast(self._read_json(allow_empty=True), source="ui")})
+        elif path == "/api/fasts/stop":
+            self._json(200, {"fast": db.stop_fast(self._read_json(allow_empty=True))})
+        elif path == "/api/body":
+            self._json(200, {"body": db.log_body(self._read_json())})
+        elif path == "/api/goal":
+            self._json(200, {"day": db.set_goal(self._read_json())})
+        elif path in STATIC_FILES or path.startswith("/api/"):
+            raise HTTPError(405, f"POST not allowed on {path}")
+        else:
+            raise HTTPError(404, f"not found: {path}")
+
+    def _patch(self):
+        path = urlparse(self.path).path
+        m = ENTRY_PATH.match(path)
+        if m:
+            row, days = db.update_entry(int(m.group(1)), self._read_json())
+            self._json(200, {"entry": row, "day": days[row["date"]], "days": days})
+            return
+        m = FAST_PATH.match(path)
+        if m:
+            self._json(200, {"fast": db.update_fast(int(m.group(1)), self._read_json())})
+            return
+        self._not_allowed()
+
+    def _delete(self):
+        path = urlparse(self.path).path
+        m = ENTRY_PATH.match(path)
+        if m:
+            row, day = db.delete_entry(int(m.group(1)))
+            self._json(200, {"deleted": row, "day": day})
+            return
+        m = FAST_PATH.match(path)
+        if m:
+            self._json(200, {"deleted": db.delete_fast(int(m.group(1)))})
+            return
+        self._not_allowed()
+
+    def _read_json(self, allow_empty=False):
+        length_hdr = self.headers.get("Content-Length")
+        if allow_empty and (length_hdr is None or length_hdr.strip() == "0"):
+            return {}
         ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
         if ctype != "application/json":
             raise HTTPError(415, "Content-Type must be application/json")
@@ -109,9 +183,7 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             raise HTTPError(400, "body is not valid UTF-8 JSON")
-        created, days = db.add_entries(payload, source="ui")
-        first_date = created[0]["date"]
-        self._json(201, {"created": created, "day": days[first_date], "days": days})
+        return payload
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
