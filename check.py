@@ -175,6 +175,17 @@ def run_edit_delete_checks(base):
     check("delete entry", status == 200 and json.loads(body)["day"]["count"] == 0, body)
     status, body = http(base, "DELETE", f"/api/entries/{ids[1]}")
     check("delete twice is 404", status == 404, body)
+    deleted = {"id": ids[1], "date": d, "time": "10:00", "item": "nuts", "net_carbs_g": 2,
+               "source": "mcp", "created_at": "2026-03-10T10:00:00+01:00", "quantity": None,
+               "calories": None, "fat_g": None, "protein_g": None, "notes": None, "meal": None,
+               "fasting_hours": None}
+    status, body = http(base, "POST", "/api/entries/restore", deleted)
+    res = json.loads(body)
+    check("restore (undo delete) keeps id, source and created_at", status == 201
+          and res["entry"]["id"] == ids[1] and res["entry"]["source"] == "mcp"
+          and res["entry"]["created_at"] == deleted["created_at"] and res["day"]["count"] == 1, body)
+    status, body = http(base, "DELETE", f"/api/entries/{ids[1]}")
+    check("restored entry can be deleted again", status == 200, body)
 
 
 def run_fast_checks(base):

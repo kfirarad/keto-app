@@ -126,6 +126,9 @@ class Handler(BaseHTTPRequestHandler):
             created, days = db.add_entries(self._read_json(), source="ui")
             first_date = created[0]["date"]
             self._json(201, {"created": created, "day": days[first_date], "days": days})
+        elif path == "/api/entries/restore":
+            row, day = db.restore_entry(self._read_json())
+            self._json(201, {"entry": row, "day": day})
         elif path == "/api/fasts/start":
             self._json(201, {"fast": db.start_fast(self._read_json(allow_empty=True), source="ui")})
         elif path == "/api/fasts/stop":

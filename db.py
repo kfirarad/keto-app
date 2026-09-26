@@ -614,6 +614,36 @@ def delete_entry(entry_id):
         conn.close()
 
 
+def restore_entry(row):
+    """Put back an entry exactly as delete_entry returned it (for Undo): same id
+    when it is still free, same source and created_at. Returns (row, day summary)."""
+    if not isinstance(row, dict):
+        raise ValidationError("body must be the deleted entry object")
+    extra = ("id", "source", "created_at")
+    _check_fields(row, ENTRY_FIELDS + extra, "entry")
+    r = validate_entry({k: v for k, v in row.items() if k in ENTRY_FIELDS})
+    source = row.get("source") if row.get("source") in ("ui", "mcp", "sheet") else "ui"
+    created_at = row.get("created_at") if isinstance(row.get("created_at"), str) \
+        else datetime.now(TZ).isoformat(timespec="seconds")
+    rid = row.get("id")
+    conn = connect()
+    try:
+        with conn:
+            if not (isinstance(rid, int) and not isinstance(rid, bool) and rid > 0) or \
+                    conn.execute("SELECT 1 FROM entries WHERE id = ?", (rid,)).fetchone():
+                rid = None
+            cur = conn.execute(
+                "INSERT INTO entries (id, entry_date, entry_time, fasting_hours, item, quantity,"
+                " calories, fat_g, protein_g, net_carbs_g, notes, meal, source, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (rid, r["entry_date"], r["entry_time"], r["fasting_hours"], r["item"],
+                 r["quantity"], r["calories"], r["fat_g"], r["protein_g"], r["net_carbs_g"],
+                 r["notes"], r["meal"], source, created_at))
+        return _row_out(_get_entry(conn, cur.lastrowid)), _day(conn, r["entry_date"])
+    finally:
+        conn.close()
+
+
 # ---- fasts ---------------------------------------------------------------
 
 def _check_fast_times(start_iso, start_time, end_iso, end_time):
