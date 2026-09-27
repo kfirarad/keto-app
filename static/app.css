@@ -170,8 +170,14 @@ button { cursor: pointer; }
 .fast-now { display: flex; align-items: baseline; gap: var(--s-2); }
 .fast-time { font: var(--t-xl)/1.1 var(--font-serif); }
 .fast .meter { grid-column: 1 / -1; margin-top: var(--s-1); }
-.fast-meta { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: var(--s-2); font-size: var(--t-xs); color: var(--muted-ink); }
+.fast-meta { grid-column: 1 / -1; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 var(--s-2); font-size: var(--t-xs); color: var(--muted-ink); }
 .fast.off { font-size: var(--t-sm); color: var(--muted-ink); }
+.fast.on .fast-meta span { white-space: nowrap; }
+.fast-meta .link { position: relative; min-height: 0; padding: 0 0 0 var(--s-2); color: var(--fast); }
+.fast-meta .link::before { content: ""; position: absolute; inset: -12px -4px; }   /* 40px tap target */
+.fast-adjust { grid-column: 1 / -1; display: grid; gap: var(--s-2); margin-top: var(--s-2); padding-top: var(--s-3); border-top: 1px solid var(--line); }
+.fast-adjust .field { max-width: 16rem; }
+.fast.on .fast-adjust .btn-primary { background: var(--fast); border-color: var(--fast); color: var(--paper); }
 
 /* ---------- section headers ---------- */
 .sec-h { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); margin: var(--s-5) 0 var(--s-2); }

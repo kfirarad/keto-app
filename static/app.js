@@ -244,8 +244,21 @@ function renderFastStrip(d) {
       <span class="fast-now"><span class="eyebrow">Fasting</span><span class="fast-time num">${dur(h)}</span></span>
       <button type="button" class="btn" data-act="fast-stop">Stop fast</button>
       ${target ? `<div class="meter thin ink" aria-hidden="true"><i style="width:${pct}%"></i></div>` : ""}
-      <div class="fast-meta num"><span>since ${fmtAt(f.start_date, f.start_time)}</span><span>${left}</span></div>
+      <div class="fast-meta num"><span>since ${fmtAt(f.start_date, f.start_time)}${S.ui.fastAdjust ? "" : `<button type="button" class="link" data-act="fast-adjust">Adjust start</button>`}</span><span>${left}</span></div>
+      ${S.ui.fastAdjust ? renderFastAdjust(f) : ""}
     </div>`;
+}
+
+// Move the running fast's start back, for when Start was pressed late.
+function renderFastAdjust(f) {
+  const shifts = [-15, -30, -60].map(m => `<button type="button" class="btn" data-act="fast-shift" data-m="${m}">${m === -60 ? "−1 h" : `−${-m} m`}</button>`).join("");
+  return `
+    <form class="fast-adjust" data-form="fast-start-time" data-id="${f.id}" novalidate>
+      <label class="field">Started at<input type="datetime-local" name="start" value="${toLocal(f.start_date, f.start_time)}" max="${isoLocal(now())}" required></label>
+      <div class="row-btns">${shifts}</div>
+      <div class="row-btns"><button class="btn btn-primary">Save</button><button type="button" class="link" data-act="fast-adjust-cancel">Cancel</button></div>
+      <p class="error">${esc(S.ui.fastError || "")}</p>
+    </form>`;
 }
 
 /* ---------- fasting on a day other than today ----------
@@ -617,7 +630,7 @@ const fail = e => toast(e.message, null, null, true);
 
 function goTo(date) {
   S.date = date;
-  S.ui.expanded = null; S.ui.goalEdit = false; S.ui.fastEditId = null;
+  S.ui.expanded = null; S.ui.goalEdit = false; S.ui.fastEditId = null; S.ui.fastAdjust = false;
   load();
 }
 
@@ -690,7 +703,30 @@ function deleteEntry(id) {
 }
 
 function startFast(at) {
-  send("POST", "/api/fasts/start", at || {}).then(() => load()).catch(fail);
+  send("POST", "/api/fasts/start", at || {}).then(res => {
+    const f = res.fast;
+    S.ui.fastAdjust = false;
+    toast(`Fast started · ${fmtAt(f.start_date, f.start_time)}`,
+      () => api(`/api/fasts/${f.id}`, { method: "DELETE" }),
+      { label: "Adjust", run: () => openFastAdjust() });
+    return load();
+  }).catch(fail);
+}
+function openFastAdjust() {
+  const away = S.date !== today();
+  if (away) goTo(today());
+  S.ui.fastAdjust = true; S.ui.fastError = "";
+  if (!away) { render(); focusFastAdjust(); }
+}
+function focusFastAdjust() {
+  const el = document.querySelector(".fast-adjust [name=start]");
+  if (el) el.focus();
+}
+// Shift a datetime-local value by whole minutes (wall-clock arithmetic).
+function shiftLocal(v, mins) {
+  const d = new Date(v + ":00Z");
+  d.setUTCMinutes(d.getUTCMinutes() + mins);
+  return d.toISOString().slice(0, 16);
 }
 function stopFast(at) {
   send("POST", "/api/fasts/stop", at || {}).then(res => {
@@ -754,6 +790,13 @@ document.addEventListener("click", ev => {
     case "copy-some": S.ui.sheet = "copy"; S.ui.error = ""; S.ui.copyIds = el.dataset.ids.split(",").map(Number); S.ui.copyTarget = null; break;
     case "fast-start": startFast(); return;
     case "fast-stop": stopFast(); return;
+    case "fast-adjust": openFastAdjust(); return;
+    case "fast-adjust-cancel": S.ui.fastAdjust = false; S.ui.fastError = ""; break;
+    case "fast-shift": {
+      const input = el.form.elements.start;
+      if (input.value) input.value = shiftLocal(input.value, +el.dataset.m);
+      return;
+    }
     case "fast-edit": S.ui.fastEditId = S.ui.fastEditId === id ? null : id; S.ui.fastError = ""; break;
     case "fast-delete": {
       const f = d.active_fast && d.active_fast.id === id ? d.active_fast : d.fasts.find(x => x.id === id);
@@ -848,6 +891,15 @@ document.addEventListener("submit", ev => {
     if (day().active_fast) stopFast(body); else startFast(body);
     return;
   }
+  if (kind === "fast-start-time") {
+    const s = fromLocal(data.get("start"));
+    if (!s.date) { S.ui.fastError = "Pick a start time."; render(); return; }
+    S.ui.fastError = "";
+    send("PATCH", `/api/fasts/${+fm.dataset.id}`, { start_date: s.date, start_time: s.time })
+      .then(() => { S.ui.fastAdjust = false; toast(`Fast start moved to ${fmtAt(s.date, s.time)}`); return load(); })
+      .catch(err => { S.ui.fastError = err.message; render(); focusFastAdjust(); });
+    return;
+  }
   if (kind === "fast") {
     const s = fromLocal(data.get("start")), e = fromLocal(data.get("end"));
     S.ui.fastError = "";
@@ -919,9 +971,9 @@ document.addEventListener("keydown", ev => {
   if (ev.key === "Escape" && S.ui.sheet) { closeSheet(); render(); }
 });
 
-/* Live fast clock: repaint only the glance panel (not while its goal editor is open). */
+/* Live fast clock: repaint only the glance panel (not while one of its editors is open). */
 setInterval(() => {
-  if (day().active_fast && !S.ui.goalEdit) paint("glance", renderGlance(day()));
+  if (day().active_fast && !S.ui.goalEdit && !S.ui.fastAdjust) paint("glance", renderGlance(day()));
 }, TICK_MS);
 
 render();
