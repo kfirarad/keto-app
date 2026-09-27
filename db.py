@@ -364,12 +364,18 @@ def _active_fast_row(conn):
 
 
 def _day(conn, iso):
-    """Full day payload: entries, totals, goal, fasts that ended this day, running fast."""
+    """Full day payload: entries, totals, goal, fasts that ended this day, every
+    fast that overlaps this day, running fast."""
     out = _summary(conn, iso, _day_rows(conn, iso))
     fasts = [_fast_out(r) for r in conn.execute(
         "SELECT * FROM fasts WHERE end_date = ? ORDER BY end_time, id", (iso,))]
     out["fasts"] = fasts
     out["fast_hours"] = _round(sum(f["hours"] for f in fasts)) if fasts else None
+    # A running fast overlaps every day from its start up to today, not future days.
+    out["day_fasts"] = [_fast_out(r) for r in conn.execute(
+        "SELECT * FROM fasts WHERE start_date <= ?"
+        " AND ((end_date IS NULL AND ? <= ?) OR end_date >= ?)"
+        " ORDER BY start_date, start_time, id", (iso, iso, today_iso(), iso))]
     active = _active_fast_row(conn)
     out["active_fast"] = _fast_out(active) if active else None
     out["body"] = _body(conn, iso)
@@ -610,6 +616,36 @@ def delete_entry(entry_id):
             old = _get_entry(conn, eid)
             conn.execute("DELETE FROM entries WHERE id = ?", (eid,))
         return _row_out(old), _day(conn, old["entry_date"])
+    finally:
+        conn.close()
+
+
+def restore_entry(row):
+    """Put back an entry exactly as delete_entry returned it (for Undo): same id
+    when it is still free, same source and created_at. Returns (row, day summary)."""
+    if not isinstance(row, dict):
+        raise ValidationError("body must be the deleted entry object")
+    extra = ("id", "source", "created_at")
+    _check_fields(row, ENTRY_FIELDS + extra, "entry")
+    r = validate_entry({k: v for k, v in row.items() if k in ENTRY_FIELDS})
+    source = row.get("source") if row.get("source") in ("ui", "mcp", "sheet") else "ui"
+    created_at = row.get("created_at") if isinstance(row.get("created_at"), str) \
+        else datetime.now(TZ).isoformat(timespec="seconds")
+    rid = row.get("id")
+    conn = connect()
+    try:
+        with conn:
+            if not (isinstance(rid, int) and not isinstance(rid, bool) and rid > 0) or \
+                    conn.execute("SELECT 1 FROM entries WHERE id = ?", (rid,)).fetchone():
+                rid = None
+            cur = conn.execute(
+                "INSERT INTO entries (id, entry_date, entry_time, fasting_hours, item, quantity,"
+                " calories, fat_g, protein_g, net_carbs_g, notes, meal, source, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (rid, r["entry_date"], r["entry_time"], r["fasting_hours"], r["item"],
+                 r["quantity"], r["calories"], r["fat_g"], r["protein_g"], r["net_carbs_g"],
+                 r["notes"], r["meal"], source, created_at))
+        return _row_out(_get_entry(conn, cur.lastrowid)), _day(conn, r["entry_date"])
     finally:
         conn.close()
 

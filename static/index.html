@@ -2,219 +2,32 @@
 <html lang="en" dir="ltr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#f4f1ea">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#fbfaf6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#131210" media="(prefers-color-scheme: dark)">
 <title>Keto log</title>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<main>
-  <nav class="daynav" aria-label="Day">
-    <button type="button" id="prev" aria-label="Previous day">&larr;</button>
-    <h1 id="date">--/--/----</h1>
-    <button type="button" id="next" aria-label="Next day">&rarr;</button>
-    <button type="button" id="today" class="today">Today</button>
-  </nav>
-
-  <section class="hero" id="hero" aria-label="Net carbs">
-    <p class="hero-line"><span class="hero-num" id="net">0</span> <span class="hero-goal">/ <span id="goal">20</span> g</span></p>
-    <div class="bar" aria-hidden="true"><div class="bar-fill" id="bar"></div></div>
-    <p class="status" id="status">20 g remaining</p>
-    <p class="goal-line" id="goal-line"><span id="goal-src">Goal 20 g</span> <button type="button" class="link" id="goal-edit">Change</button></p>
-    <form class="goal-form" id="goal-form" hidden novalidate>
-      <label for="goal-input">Net-carb goal for this day, g</label>
-      <div class="goal-ctl">
-        <input id="goal-input" inputmode="decimal">
-        <button type="submit" class="primary">Save</button>
-        <button type="button" class="link" id="goal-reset" hidden>Use carried-over goal</button>
-        <button type="button" class="link" id="goal-cancel">Cancel</button>
-      </div>
-      <p class="note">Later days with no entries yet follow this goal.</p>
-      <p class="error" id="goal-error" role="alert"></p>
-    </form>
+<main class="app">
+  <nav class="nav" id="nav" aria-label="Day"></nav>
+  <section class="glance is-under" id="glance" aria-label="Day at a glance">
+    <p class="eyebrow net-label">Net carbs</p>
+    <p class="hero"><span><span class="hero-num num">0</span><span class="hero-goal">/ 20 g</span></span></p>
   </section>
-
-  <div class="secondary" id="secondary" hidden>
-    <p id="macros"></p>
-    <p id="window"></p>
-  </div>
-
-  <section class="week" id="week" aria-label="Last 7 days" hidden>
-    <div class="week-bars" id="week-bars"></div>
-    <p class="week-stats" id="week-stats"></p>
-  </section>
-
-  <section class="fasting" aria-label="Fasting">
-    <p class="fast-state" id="fast-state">Not fasting</p>
-    <div class="fast-progress" id="fast-progress" hidden>
-      <div class="fp-bar" aria-hidden="true"><div class="fp-fill" id="fp-fill"></div></div>
-      <p class="fp-text" id="fp-text"></p>
-    </div>
-    <div class="fast-ctl">
-      <input id="fast-at" type="datetime-local" aria-label="Fast start or stop time">
-      <button type="button" id="fast-btn" class="primary">Start fasting</button>
-      <label class="fast-target">Target
-        <select id="fast-target">
-          <option value="">none</option>
-          <option value="12">12 h</option>
-          <option value="14">14 h</option>
-          <option value="16">16 h</option>
-          <option value="18">18 h</option>
-          <option value="20">20 h</option>
-          <option value="24">24 h</option>
-        </select>
-      </label>
-    </div>
-    <p class="note" id="fast-note"></p>
-    <p class="error" id="fast-error" role="alert"></p>
-    <ol class="fasts" id="fasts" hidden></ol>
-  </section>
-
-  <details class="bodylog" id="bodylog">
-    <summary id="body-sum">Body</summary>
-    <form id="body-form" class="body-form" novalidate>
-      <div class="field">
-        <label for="b-weight">Weight kg</label>
-        <input id="b-weight" inputmode="decimal">
-      </div>
-      <div class="field">
-        <label for="b-ket">Ketones mmol/L</label>
-        <input id="b-ket" inputmode="decimal">
-      </div>
-      <div class="field">
-        <label for="b-glu">Glucose mmol/L</label>
-        <input id="b-glu" inputmode="decimal">
-      </div>
-      <button type="submit" class="primary" id="b-save">Save</button>
-    </form>
-    <p class="body-stats" id="body-stats"></p>
-    <svg class="spark" id="spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true" hidden>
-      <polyline id="spark-line" fill="none" vector-effect="non-scaling-stroke"></polyline>
-    </svg>
-    <div class="water">
-      <span id="water">Water 0 ml</span>
-      <button type="button" data-ml="250">+250</button>
-      <button type="button" data-ml="500">+500</button>
-      <button type="button" data-ml="-250">&minus;250</button>
-    </div>
-    <p class="error" id="body-error" role="alert"></p>
-  </details>
-
-  <p class="entries-head" id="entries-head" hidden>
-    <button type="button" class="link" id="copy-open">Copy entries to another day</button>
-  </p>
-  <section class="entries" id="entries" aria-label="Entries"></section>
-  <section class="copy" id="copy-panel" aria-label="Copy entries" hidden></section>
-
-  <section class="quick" id="quick" aria-label="Log again" hidden>
-    <p class="quick-label">Log again <span>one tap adds it now; type below to change the amount</span></p>
-    <div class="chips" id="chips"></div>
-  </section>
-
-  <form id="form" class="add" autocomplete="off" novalidate>
-    <p class="form-mode wide" id="form-mode" hidden></p>
-    <div class="field wide">
-      <label for="f-item">Item</label>
-      <input id="f-item" name="item" dir="auto" required aria-autocomplete="list" aria-controls="suggest">
-      <ul class="suggest" id="suggest" role="listbox" hidden></ul>
-    </div>
-    <div class="field wide">
-      <label for="f-quantity">Quantity</label>
-      <input id="f-quantity" name="quantity" dir="auto">
-    </div>
-    <div class="field scale wide" id="scale" hidden>
-      <label for="f-weight" id="f-weight-label">Weight g</label>
-      <div class="scale-row">
-        <input id="f-weight" inputmode="decimal">
-        <span class="portions" role="group" aria-label="Portion">
-          <button type="button" data-m="0.5">&times;&frac12;</button>
-          <button type="button" data-m="1">&times;1</button>
-          <button type="button" data-m="1.5">&times;1&frac12;</button>
-          <button type="button" data-m="2">&times;2</button>
-        </span>
-        <span class="scale-base" id="scale-base"></span>
-      </div>
-    </div>
-    <div class="field">
-      <label for="f-net">Net carbs g</label>
-      <input id="f-net" name="net_carbs_g" inputmode="decimal" required>
-    </div>
-    <div class="field">
-      <label for="f-cal">Calories</label>
-      <input id="f-cal" name="calories" inputmode="decimal">
-    </div>
-    <div class="field">
-      <label for="f-fat">Fat g</label>
-      <input id="f-fat" name="fat_g" inputmode="decimal">
-    </div>
-    <div class="field">
-      <label for="f-protein">Protein g</label>
-      <input id="f-protein" name="protein_g" inputmode="decimal">
-    </div>
-
-    <details class="more wide" id="more">
-      <summary id="more-sum">More</summary>
-      <div class="more-grid">
-        <div class="field">
-          <label for="f-date">Date</label>
-          <input id="f-date" name="date" type="date" required>
-        </div>
-        <div class="field">
-          <label for="f-time">Time</label>
-          <input id="f-time" name="time" type="time">
-        </div>
-        <div class="field">
-          <label for="f-meal">Meal</label>
-          <input id="f-meal" name="meal" dir="auto" list="meals">
-          <datalist id="meals"></datalist>
-        </div>
-        <div class="field">
-          <label for="f-fast">Fasting hours</label>
-          <input id="f-fast" name="fasting_hours" inputmode="decimal">
-        </div>
-        <div class="field wide">
-          <label for="f-notes">Notes</label>
-          <input id="f-notes" name="notes" dir="auto">
-        </div>
-        <fieldset class="label-calc wide">
-          <legend>Net carbs from a label</legend>
-          <div class="field">
-            <label for="c-total">Total carbs g</label>
-            <input id="c-total" inputmode="decimal">
-          </div>
-          <div class="field">
-            <label for="c-fiber">Fiber g</label>
-            <input id="c-fiber" inputmode="decimal">
-          </div>
-          <div class="field">
-            <label for="c-sa">Sugar alcohols g</label>
-            <input id="c-sa" inputmode="decimal">
-          </div>
-        </fieldset>
-      </div>
-    </details>
-
-    <div class="actions wide">
-      <button type="submit" id="save" class="primary">Add</button>
-      <button type="button" id="cancel" hidden>Cancel</button>
-      <p class="preview" id="preview"></p>
-      <p class="error" id="error" role="alert"></p>
-    </div>
-  </form>
-
-  <footer class="foot">
-    Export CSV:
-    <a href="/api/export.csv?table=entries">entries</a> ·
-    <a href="/api/export.csv?table=fasts">fasts</a> ·
-    <a href="/api/export.csv?table=body">body</a>
+  <section id="quick" aria-label="Log again"></section>
+  <section id="log" aria-label="Entries"></section>
+  <section class="more" id="more" aria-label="Week, fasting and body"></section>
+  <footer class="foot">Export CSV:
+    <a class="link" href="/api/export.csv?table=entries">entries</a> ·
+    <a class="link" href="/api/export.csv?table=fasts">fasts</a> ·
+    <a class="link" href="/api/export.csv?table=body">body</a>
   </footer>
 </main>
 
-<button type="button" class="fab" id="fab" hidden>Add food</button>
-<div class="toast" id="toast" role="status" hidden>
-  <span id="toast-msg"></span>
-  <button type="button" class="link" id="toast-undo">Undo</button>
-</div>
+<div class="pinbar" id="pinbar"></div>
+<div id="sheet"></div>
+<div id="toast" aria-live="polite"></div>
 
 <script src="/static/app.js"></script>
 </body>

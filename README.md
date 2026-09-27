@@ -24,24 +24,26 @@ systemctl --user daemon-reload && systemctl --user enable --now keto.service
 
 ### Using the UI
 
-- **Log again**: the most-logged items of the last 30 days sit above the form. One tap adds the item now (meal taken from an entry logged up to 2 h earlier that day), with Undo in the notice at the bottom.
-- **Copy**: "Copy entries to another day" (or Copy on a meal header) opens a checklist; pick the entries and the target date, optionally keeping times. Undo is available.
-- **Add form**: item, quantity, weight and the four numbers are always visible; date, time, meal (with suggestions from past meals), fasting hours, notes and a label calculator (total carbs − fiber − sugar alcohols = net carbs) are under More. Before saving, a line shows the day's net carbs after this entry. Portion buttons (×½ to ×2) scale a loaded entry. A floating "Add food" button jumps to the form.
-- **Overview**: macros with their share of energy, the eating window (first to last food), and a 7-day strip of net carbs against each day's goal (tap a day to open it), with the average, days within goal and the streak of consecutive days within goal.
-- **Fasting target**: pick a target (default 16 h, remembered in this browser); the running fast shows a progress bar and the time left.
-- **Body**: weight (kg), ketones and glucose (mmol/L) and water per day. Shows change since the previous weigh-in, a 30-day weight line, and GKI (glucose ÷ ketones) with its band.
+The layout follows `design/redesign.html` (PR #1), top to bottom:
+
+- **Day navigation** (sticky): previous / next day, the date and weekday, Today.
+- **At a glance**: net carbs against the day's goal with what is left or over (green under, orange over), the goal line with Change, macros with their share of energy, the eating window (first to last food) and fasting hours, and the fast: running time, Stop fast, progress toward the target and when it ends ("ends in 1:09 · 14:30"); or "Not fasting" with the last fast or last food and Start fast. On other days the panel shows that day's fasting instead: each fast that overlaps the day (started, ended, or spanning it; for days logged before the fast tracker, the fasting hours on the entry that broke a fast), a 24-hour bar with fasting in blue and food times marked, and how much of the day was fasted.
+- **Log again**: chips for the most-logged items of the last 30 days. One tap adds the item to the day shown at the current time (meal taken from an entry logged up to 2 h earlier that day), with Undo.
+- **Log**: entries in time order, grouped into runs by meal with a carb subtotal and Copy per meal. Each row is one line (time, item and quantity, net carbs); tap it for notes, macros, "added by agent" for MCP rows, and Edit / Log again now / Delete. Delete has Undo (the row comes back with its id and source). "Copy entries to another day" opens a checklist sheet with a target day and "keep times"; Undo removes the copies.
+- **Week / Fasting / Body** (collapsed): the 7-day strip of net carbs against each day's goal (tap a day to open it) with average, days within goal and streak; fasting with a date-time field for when the fast really started or stopped, the target (default 16 h, remembered in this browser), and the running and ended fasts with Edit / Delete; body readings: weight (kg), ketones and glucose (mmol/L), GKI (glucose ÷ ketones) with its band, change since the previous weigh-in, a 30-day weight line, and water (+250 / +500 / −250).
+- **Add food** (pinned bar with what is left): opens a sheet. Typing an item suggests past items; picking one fills quantity and macros and shows Weight with ×½ ×1 ×1½ ×2. Changing the weight scales the quantity's numbers and all four macros; the base weight is the grams in each `+`-separated part of the quantity, e.g. `3 ביצים (124 גרם) + 18 גרם חמאה` is 142 g, and with no grams it is a portion multiplier. "After this" shows the day's net carbs with this entry. More holds date, time, meal (suggests past meals), fasting hours, notes, and a label calculator (total carbs − fiber − sugar alcohols). The sheet stays open after Add for the next item; date, time and meal are kept. Edit uses the same sheet. Stopping a fast offers "Log meal" with the fast's hours prefilled.
 - **Export**: CSV links at the bottom for entries, fasts and body readings.
-- **Entries**: every row has Edit and Delete. Edit loads the row into the form (Save / Cancel); changing its date moves it to that day.
-- **Past items**: typing in Item suggests earlier items (latest values per item). Picking one fills quantity and macros and shows a Weight field. Changing the weight scales the quantity's numbers and all four macros proportionally. The base weight is the grams in each `+`-separated part of the quantity, e.g. `3 ביצים (124 גרם) + 18 גרם חמאה` is 142 g; with no grams in the quantity the field is a portion multiplier.
-- **Fasting**: Start fasting / Stop fasting, with a native date-time field that defaults to now and can be moved to when the fast really started or ended. The running fast shows its elapsed time. Fasts are listed on the day they ended and can be edited or deleted. Stopping a fast prefills its hours into the add form's Fasting hours, so the entry that breaks the fast carries them.
-- **Daily goal**: Change under the hero sets the net-carb goal for the day shown. A day with no goal of its own carries over the goal of the nearest earlier day that has one. Changing a goal flows forward to later days that have no entries yet; days that already have entries keep the goal they had.
+- **Daily goal**: a day with no goal of its own carries over the goal of the nearest earlier day that has one. Changing a goal flows forward to later days that have no entries yet; days that already have entries keep the goal they had.
+
+Light and dark follow the system setting.
 
 ### HTTP API
 
 - `GET /` — the UI
-- `GET /api/day?date=DD/MM/YYYY` — entries, totals, `goal`, `goal_source` (`set`/`inherited`/`default`), `remaining`, `over_goal`, `fasts` (ended that day), `fast_hours`, `active_fast` (missing date = today)
+- `GET /api/day?date=DD/MM/YYYY` — entries, totals, `goal`, `goal_source` (`set`/`inherited`/`default`), `remaining`, `over_goal`, `fasts` (ended that day), `fast_hours`, `day_fasts` (every fast overlapping that day), `active_fast` (missing date = today)
 - `POST /api/entries` — one object or a list. Fields: `date`, `time`, `fasting_hours`, `item`, `quantity`, `calories`, `fat_g`, `protein_g`, `net_carbs_g`, `notes`, `meal`. `item` and `net_carbs_g` are required.
-- `PATCH /api/entries/<id>` — change some fields (null clears an optional field); `DELETE /api/entries/<id>`
+- `PATCH /api/entries/<id>` — change some fields (null clears an optional field); `DELETE /api/entries/<id>` returns the deleted row
+- `POST /api/entries/restore` — put back a deleted row as DELETE returned it (same id if free, same source and created_at); used by Undo
 - `GET /api/recent?n=14` — one summary per day, newest first
 - `GET /api/foods` — latest row per distinct item, most recent first (used for suggestions); `?top=8` gives the most-logged items of the last 30 days
 - `GET /api/meals` — past meal names, most used first
