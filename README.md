@@ -27,7 +27,7 @@ systemctl --user daemon-reload && systemctl --user enable --now keto.service
 The layout follows `design/redesign.html` (PR #1), top to bottom:
 
 - **Day navigation** (sticky): previous / next day, the date and weekday, Today.
-- **At a glance**: net carbs against the day's goal with what is left or over (green under, orange over), the goal line with Change, macros with their share of energy, the eating window (first to last food) and fasting hours, and the fast: running time, Stop fast, and progress toward the target; or "Not fasting · last food 22:30" with Start fast.
+- **At a glance**: net carbs against the day's goal with what is left or over (green under, orange over), the goal line with Change, macros with their share of energy, the eating window (first to last food) and fasting hours, and the fast: running time, Stop fast, progress toward the target and when it ends ("ends in 1:09 · 14:30"); or "Not fasting" with the last fast or last food and Start fast. On other days the panel shows that day's fasting instead: each fast that overlaps the day (started, ended, or spanning it; for days logged before the fast tracker, the fasting hours on the entry that broke a fast), a 24-hour bar with fasting in blue and food times marked, and how much of the day was fasted.
 - **Log again**: chips for the most-logged items of the last 30 days. One tap adds the item to the day shown at the current time (meal taken from an entry logged up to 2 h earlier that day), with Undo.
 - **Log**: entries in time order, grouped into runs by meal with a carb subtotal and Copy per meal. Each row is one line (time, item and quantity, net carbs); tap it for notes, macros, "added by agent" for MCP rows, and Edit / Log again now / Delete. Delete has Undo (the row comes back with its id and source). "Copy entries to another day" opens a checklist sheet with a target day and "keep times"; Undo removes the copies.
 - **Week / Fasting / Body** (collapsed): the 7-day strip of net carbs against each day's goal (tap a day to open it) with average, days within goal and streak; fasting with a date-time field for when the fast really started or stopped, the target (default 16 h, remembered in this browser), and the running and ended fasts with Edit / Delete; body readings: weight (kg), ketones and glucose (mmol/L), GKI (glucose ÷ ketones) with its band, change since the previous weigh-in, a 30-day weight line, and water (+250 / +500 / −250).
@@ -40,7 +40,7 @@ Light and dark follow the system setting.
 ### HTTP API
 
 - `GET /` — the UI
-- `GET /api/day?date=DD/MM/YYYY` — entries, totals, `goal`, `goal_source` (`set`/`inherited`/`default`), `remaining`, `over_goal`, `fasts` (ended that day), `fast_hours`, `active_fast` (missing date = today)
+- `GET /api/day?date=DD/MM/YYYY` — entries, totals, `goal`, `goal_source` (`set`/`inherited`/`default`), `remaining`, `over_goal`, `fasts` (ended that day), `fast_hours`, `day_fasts` (every fast overlapping that day), `active_fast` (missing date = today)
 - `POST /api/entries` — one object or a list. Fields: `date`, `time`, `fasting_hours`, `item`, `quantity`, `calories`, `fat_g`, `protein_g`, `net_carbs_g`, `notes`, `meal`. `item` and `net_carbs_g` are required.
 - `PATCH /api/entries/<id>` — change some fields (null clears an optional field); `DELETE /api/entries/<id>` returns the deleted row
 - `POST /api/entries/restore` — put back a deleted row as DELETE returned it (same id if free, same source and created_at); used by Undo

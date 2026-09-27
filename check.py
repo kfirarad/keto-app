@@ -207,6 +207,10 @@ def run_fast_checks(base):
     check("fast listed on the day it ended", [f["id"] for f in day["fasts"]] == [fid]
           and day["fast_hours"] == 16.5 and day["active_fast"] is None, body)
 
+    check("fast shows on the day it started and the day it ended",
+          [f["id"] for f in json.loads(http(base, "GET", "/api/day?date=01/03/2026")[1])["day_fasts"]] == [fid]
+          and [f["id"] for f in day["day_fasts"]] == [fid]
+          and json.loads(http(base, "GET", "/api/day?date=03/03/2026")[1])["day_fasts"] == [])
     status, body = http(base, "PATCH", f"/api/fasts/{fid}", {"start_time": "18:30"})
     check("edit fast start", status == 200 and json.loads(body)["fast"]["hours"] == 18, body)
     status, body = http(base, "PATCH", f"/api/fasts/{fid}", {"end_time": None})

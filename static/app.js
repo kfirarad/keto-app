@@ -28,6 +28,9 @@ const kcal = n => String(Math.round(+n || 0));
 const tidy = x => String(Math.round(x * 100) / 100);
 const num = s => parseFloat(String(s).replace(",", "."));
 const dur = h => { const m = Math.max(0, Math.round(h * 60)); return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} m`; };
+const hmm = h => { const m = Math.max(0, Math.round(h * 60)); return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`; };
+// Clock time of an instant, with the date when it is not today.
+const clockAt = ms => { const d = new Date(ms); return dmy(d) === today() ? hm(d) : `${dmy(d).slice(0, 5)} ${hm(d)}`; };
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const ut = s => `<bdi dir="auto">${esc(s)}</bdi>`;                 // user text, direction isolated
 const toLocal = (d, t) => d && t ? `${dmyToIso(d)}T${t}` : "";      // API date+time -> datetime-local
@@ -214,22 +217,87 @@ function renderFacts(d) {
     ${second ? `<p class="facts num">${second}</p>` : ""}`;
 }
 
+// "ends in 6:27 · 14:30", or how long ago the target was reached.
+function targetText(f) {
+  const h = fastHours(f), target = S.fastTarget;
+  if (!target) return "no target";
+  return h < target
+    ? `ends in ${hmm(target - h)} · ${clockAt(Date.parse(f.start_at) + target * 3.6e6)}`
+    : `${target} h reached ${hmm(h - target)} ago`;
+}
+
 function renderFastStrip(d) {
+  if (S.date !== today()) return renderFastHistory(d);
   const f = d.active_fast;
   if (!f) {
+    const ended = d.fasts[d.fasts.length - 1];
     const timed = d.entries.filter(x => x.time);
     const last = timed.length ? timed[timed.length - 1].time : null;
-    return `<div class="fast off"><span>Not fasting${last ? ` · last food ${last}` : ""}</span><button type="button" class="btn" data-act="fast-start">Start fast</button></div>`;
+    const note = ended ? ` · last fast ${g(ended.hours)} h, ended ${ended.end_time}` : last ? ` · last food ${last}` : "";
+    return `<div class="fast off"><span>Not fasting${note}</span><button type="button" class="btn" data-act="fast-start">Start fast</button></div>`;
   }
   const h = fastHours(f), target = S.fastTarget;
   const pct = target ? Math.min(h / target, 1) * 100 : 0;
-  const left = target ? (h < target ? `${dur(target - h)} to ${target} h` : `${target} h reached ${dur(h - target).replace(/^0 h /, "")} ago`) : "no target";
+  const left = targetText(f);
   return `
     <div class="fast on" aria-live="off">
       <span class="fast-now"><span class="eyebrow">Fasting</span><span class="fast-time num">${dur(h)}</span></span>
       <button type="button" class="btn" data-act="fast-stop">Stop fast</button>
       ${target ? `<div class="meter thin ink" aria-hidden="true"><i style="width:${pct}%"></i></div>` : ""}
       <div class="fast-meta num"><span>since ${fmtAt(f.start_date, f.start_time)}</span><span>${left}</span></div>
+    </div>`;
+}
+
+/* ---------- fasting on a day other than today ----------
+   Fasts from the fasts table that overlap the day; for older days logged
+   before the fast tracker, the fasting_hours on the entry that broke a fast. */
+function daySegments(d) {
+  const iso = dmyToIso(S.date), isToday = S.date === today();
+  const segs = [];
+  for (const f of d.day_fasts || []) {
+    const from = dmyToIso(f.start_date) < iso ? 0 : minutes(f.start_time);
+    const to = f.end_date ? (dmyToIso(f.end_date) > iso ? 1440 : minutes(f.end_time))
+      : (isToday ? minutes(hm(now())) : 1440);
+    segs.push({ from, to, f });
+  }
+  // An entry's fasting_hours is the same fast as a tracked one ending this day.
+  if (!segs.some(s => s.f.end_date === S.date)) {
+    for (const x of d.entries) {
+      if (!x.fasting_hours || !x.time) continue;
+      const to = minutes(x.time);
+      segs.push({ from: Math.max(0, to - x.fasting_hours * 60), to, entry: x });
+    }
+  }
+  return segs.sort((a, b) => a.from - b.from);
+}
+
+function fastLine(seg) {
+  if (seg.entry) return `Broke a ${g(seg.entry.fasting_hours)} h fast at ${seg.entry.time}`;
+  const f = seg.f, startsHere = f.start_date === S.date, endsHere = f.end_date === S.date;
+  if (!f.end_date) return startsHere ? `Started ${f.start_time} · running ${hmm(fastHours(f))}`
+    : `Fasting all day · running since ${fmtAt(f.start_date, f.start_time)}`;
+  const h = `${g(f.hours)} h fast`;
+  if (startsHere && endsHere) return `${f.start_time}–${f.end_time} · ${h}`;
+  if (endsHere) return `Ended ${f.end_time} · ${h} since ${fmtAt(f.start_date, f.start_time)}`;
+  if (startsHere) return `Started ${f.start_time} · ${h} until ${fmtAt(f.end_date, f.end_time)}`;
+  return `Fasting all day · ${h}, ${fmtAt(f.start_date, f.start_time)} → ${fmtAt(f.end_date, f.end_time)}`;
+}
+
+function renderFastHistory(d) {
+  const segs = daySegments(d);
+  if (!segs.length) return `<div class="fast off"><span>No fast recorded this day</span></div>`;
+  const longest = Math.max(...segs.map(s => s.entry ? s.entry.fasting_hours : fastHours(s.f)));
+  const bars = segs.map(s => `<i style="left:${s.from / 14.4}%;width:${Math.max(0, s.to - s.from) / 14.4}%"></i>`).join("");
+  const food = d.entries.filter(x => x.time && ((x.calories || 0) > 0 || x.net_carbs_g > 0))
+    .map(x => `<b style="left:${minutes(x.time) / 14.4}%"></b>`).join("");
+  const fasted = segs.reduce((a, s) => a + Math.max(0, s.to - s.from), 0) / 60;
+  return `
+    <div class="fast hist">
+      <span class="fast-now"><span class="eyebrow">Fasting</span><span class="fast-time num">${g(longest)} h</span></span>
+      <ul class="fast-lines num">${segs.map(s => `<li>${fastLine(s)}</li>`).join("")}</ul>
+      <div class="daybar" role="img" aria-label="Fasted ${hmm(fasted)} of this day">${bars}${food}</div>
+      <div class="daybar-ticks num" aria-hidden="true"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+      <p class="fast-meta"><span>fasted ${hmm(fasted)} of this day</span><span>marks = food</span></p>
     </div>`;
 }
 
@@ -313,7 +381,7 @@ function renderWeek() {
 
 function renderFasting(d) {
   const f = d.active_fast;
-  const list = [...(f ? [f] : []), ...d.fasts].map(x => {
+  const list = (d.day_fasts || []).map(x => {
     const h = fastHours(x);
     const text = x.end_date
       ? `${g(h)} h fast · ${fmtAt(x.start_date, x.start_time)} → ${fmtAt(x.end_date, x.end_time)}`
@@ -334,7 +402,7 @@ function renderFasting(d) {
       </form>` : ""}</li>`;
   }).join("");
   const targets = [0, 12, 14, 16, 18, 20, 24].map(t => `<option value="${t}"${t === S.fastTarget ? " selected" : ""}>${t ? t + " h" : "None"}</option>`).join("");
-  const sum = f ? `${dur(fastHours(f))} · target ${S.fastTarget ? S.fastTarget + " h" : "none"}`
+  const sum = f ? `${dur(fastHours(f))} · ${S.fastTarget ? targetText(f) : "no target"}`
     : d.fasts.length ? `last ${g(d.fasts[d.fasts.length - 1].hours)} h` : "not fasting";
   return `
     <details data-sec="fast"${S.ui.open.fast ? " open" : ""}>
@@ -748,7 +816,7 @@ document.addEventListener("change", ev => {
     S.fastTarget = +ev.target.value; saveTarget(S.fastTarget);
     paint("glance", renderGlance(day()));
     const sum = document.querySelector("[data-sec=fast] .sum");
-    if (sum && day().active_fast) sum.textContent = `${dur(fastHours(day().active_fast))} · target ${S.fastTarget ? S.fastTarget + " h" : "none"}`;
+    if (sum && day().active_fast) sum.textContent = `${dur(fastHours(day().active_fast))} · ${targetText(day().active_fast)}`;
   }
 });
 document.addEventListener("toggle", ev => {

@@ -364,12 +364,18 @@ def _active_fast_row(conn):
 
 
 def _day(conn, iso):
-    """Full day payload: entries, totals, goal, fasts that ended this day, running fast."""
+    """Full day payload: entries, totals, goal, fasts that ended this day, every
+    fast that overlaps this day, running fast."""
     out = _summary(conn, iso, _day_rows(conn, iso))
     fasts = [_fast_out(r) for r in conn.execute(
         "SELECT * FROM fasts WHERE end_date = ? ORDER BY end_time, id", (iso,))]
     out["fasts"] = fasts
     out["fast_hours"] = _round(sum(f["hours"] for f in fasts)) if fasts else None
+    # A running fast overlaps every day from its start up to today, not future days.
+    out["day_fasts"] = [_fast_out(r) for r in conn.execute(
+        "SELECT * FROM fasts WHERE start_date <= ?"
+        " AND ((end_date IS NULL AND ? <= ?) OR end_date >= ?)"
+        " ORDER BY start_date, start_time, id", (iso, iso, today_iso(), iso))]
     active = _active_fast_row(conn)
     out["active_fast"] = _fast_out(active) if active else None
     out["body"] = _body(conn, iso)
