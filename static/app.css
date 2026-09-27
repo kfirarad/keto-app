@@ -118,6 +118,7 @@ button { cursor: pointer; }
 .link:hover { text-decoration-color: currentColor; }
 .icon-btn { width: var(--tap); height: var(--tap); display: grid; place-items: center; border: 0; border-radius: var(--r-2); background: none; font-size: var(--t-xl); line-height: 1; }
 .icon-btn:hover { background: var(--hl); }
+.icon-btn:disabled { opacity: .25; cursor: default; background: none; }
 
 /* fields */
 .field { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: var(--t-xs); color: var(--muted-ink); }
@@ -329,6 +330,7 @@ button { cursor: pointer; }
 .fast.hist .fast-meta { margin: 0; }
 
 /* ---------- day change ---------- */
+.week .day:disabled { opacity: .35; cursor: default; }
 .app #glance, .app #quick, .app #log, .app #more { transition: opacity .15s ease-out; }
 .app.switching #glance, .app.switching #quick, .app.switching #log, .app.switching #more { opacity: .35; }
 @media (prefers-reduced-motion: reduce) { .app #glance, .app #quick, .app #log, .app #more { transition: none; } }

@@ -379,7 +379,18 @@ def _day(conn, iso):
     active = _active_fast_row(conn)
     out["active_fast"] = _fast_out(active) if active else None
     out["body"] = _body(conn, iso)
+    out["first_date"] = format_date(_first_iso(conn))
     return out
+
+
+def _first_iso(conn):
+    """The first tracked day: the earliest entry, fast start or body reading,
+    never later than today (today when nothing is logged yet)."""
+    first = conn.execute(
+        "SELECT MIN(d) FROM (SELECT MIN(entry_date) AS d FROM entries"
+        " UNION ALL SELECT MIN(start_date) FROM fasts"
+        " UNION ALL SELECT MIN(log_date) FROM body_log)").fetchone()[0]
+    return min(first or today_iso(), today_iso())
 
 
 # ---- entries -------------------------------------------------------------

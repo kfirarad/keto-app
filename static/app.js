@@ -23,6 +23,7 @@ const dmyToDate = s => new Date(dmyToIso(s) + "T12:00:00Z");
 const addDays = (s, n) => { const d = dmyToDate(s); d.setUTCDate(d.getUTCDate() + n); return `${String(d.getUTCDate()).padStart(2, "0")}/${String(d.getUTCMonth() + 1).padStart(2, "0")}/${d.getUTCFullYear()}`; };
 const weekday = (s, len) => dmyToDate(s).toLocaleDateString("en-GB", { weekday: len, timeZone: "UTC" });
 const today = () => dmy(now());
+const after = (a, b) => dmyToIso(a) > dmyToIso(b);                 // DD/MM/YYYY a is later than b
 const g = n => String(Math.round((+n || 0) * 10) / 10);            // 17.3, 1, 0
 const kcal = n => String(Math.round(+n || 0));
 const tidy = x => String(Math.round(x * 100) / 100);
@@ -110,7 +111,7 @@ function load() {
     api(`/api/days?n=7&end=${q(date)}`).catch(() => null),
   ]).then(([d, w]) => {
     if (seq !== S.seq) return;
-    S.day = d; S.week = w;
+    S.day = d; S.week = w; S.first = d.first_date;
     render();
     slideIn();
   }).catch(e => { if (seq === S.seq) { slideIn(); toast(e.message, null, null, true); } });
@@ -167,11 +168,11 @@ function render() {
 function renderGlance(d) { return renderHero(d) + renderGoal(d) + renderFacts(d) + renderFastStrip(d); }
 
 function renderNav() {
-  const isToday = S.date === today();
+  const isToday = S.date === today(), isFirst = !!S.first && !after(S.date, S.first);
   return `
-    <button type="button" class="icon-btn" data-act="day" data-n="-1" aria-label="Previous day">&lsaquo;</button>
+    <button type="button" class="icon-btn" data-act="day" data-n="-1" aria-label="Previous day" ${isFirst ? "disabled" : ""}>&lsaquo;</button>
     <h1><span class="num">${S.date}</span><small>${weekday(S.date, "long")}</small></h1>
-    <button type="button" class="icon-btn" data-act="day" data-n="1" aria-label="Next day">&rsaquo;</button>
+    <button type="button" class="icon-btn" data-act="day" data-n="1" aria-label="Next day" ${isToday ? "disabled" : ""}>&rsaquo;</button>
     <button type="button" class="btn" data-act="today" ${isToday ? "disabled" : ""}>Today</button>`;
 }
 
@@ -376,7 +377,7 @@ function renderWeek() {
     const none = c.carbs == null, over = !none && c.over;
     const label = `${weekday(c.date, "short").slice(0, 2)} ${c.date.slice(0, 2)}`;
     const sr = `${weekday(c.date, "long")} ${c.date}: ${none ? "no entries" : `${g(c.carbs)} of ${g(c.goal)} g${over ? ", over goal" : ""}`}`;
-    return `<button type="button" class="day${c.date === S.date ? " cur" : ""}${over ? " over" : ""}${none ? " none" : ""}" data-act="goto" data-date="${c.date}" aria-label="${sr}"${c.date === S.date ? ' aria-current="date"' : ""}>
+    return `<button type="button" class="day${c.date === S.date ? " cur" : ""}${over ? " over" : ""}${none ? " none" : ""}" data-act="goto" data-date="${c.date}" aria-label="${sr}"${c.date === S.date ? ' aria-current="date"' : ""}${S.first && after(S.first, c.date) ? " disabled" : ""}>
       <span class="v num" aria-hidden="true">${none ? "–" : g(c.carbs)}</span>
       <span class="plot" aria-hidden="true"><i style="height:${(c.carbs ?? 0) / max * 100}%"></i><b style="bottom:${c.goal / max * 100}%"></b></span>
       <span class="lbl" aria-hidden="true">${label}</span></button>`;
@@ -637,15 +638,26 @@ function slideIn() {
   S.ui.slide = 0;
   document.querySelector(".app").classList.remove("switching");
   if (!dir || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const anims = [];
   SLIDE_PARTS.forEach((sel, i) => {
     const el = document.querySelector(sel);
-    if (el && el.animate) el.animate(
+    if (el && el.animate) anims.push(el.animate(
       [{ opacity: 0, transform: `translateX(${dir * 28}px)` }, { opacity: 1, transform: "none" }],
-      { duration: 260, delay: i * 30, easing: "cubic-bezier(.2,.7,.2,1)", fill: "backwards" });
+      { duration: 260, delay: i * 30, easing: "cubic-bezier(.2,.7,.2,1)", fill: "backwards" }));
   });
+  // If the animation clock stalls (paused tab, some webviews), never leave the day hidden.
+  setTimeout(() => anims.forEach(a => { if (a.playState !== "finished") a.finish(); }), 600);
+}
+
+// Days run from the first tracked day to today; nothing before or after.
+function clampDay(date) {
+  if (after(date, today())) return today();
+  if (S.first && after(S.first, date)) return S.first;
+  return date;
 }
 
 function goTo(date) {
+  date = clampDay(date);
   if (date !== S.date) S.ui.slide = dmyToIso(date) > dmyToIso(S.date) ? 1 : -1;
   document.querySelector(".app").classList.toggle("switching", !!S.ui.slide);
   S.date = date;
@@ -940,7 +952,7 @@ document.addEventListener("submit", ev => {
     send("POST", "/api/entries", payload).then(res => {
       const created = res.created.map(x => x.id);
       closeSheet();
-      toast(`Copied ${created.length} from ${from.slice(0, 5)}`,
+      toast(`Copied ${created.length} from ${from.slice(0, 5)} to ${target.slice(0, 5)}`,
         () => Promise.all(created.map(id => api(`/api/entries/${id}`, { method: "DELETE" }))));
       goTo(target);
     }).catch(e => { S.ui.busy = false; S.ui.error = e.message; render(); });

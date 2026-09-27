@@ -62,6 +62,9 @@ def run_http_checks():
         status, html = http(base, "GET", "/")
         check("GET / serves HTML containing 20", status == 200 and "<html" in html and "20" in html)
 
+        today = db.format_date(db.today_iso())
+        check("first_date is today on an empty log",
+              json.loads(http(base, "GET", "/api/day")[1])["first_date"] == today)
         d = "01/03/2026"
         status, body = http(base, "POST", "/api/entries", [
             {"date": d, "time": "08:00", "item": "eggs", "quantity": "3",
@@ -78,6 +81,7 @@ def run_http_checks():
         day = json.loads(body)
         t = day.get("totals", {})
         check("day totals net carbs", status == 200 and t.get("net_carbs_g") == 5.5, body)
+        check("first_date is the earliest logged day", day.get("first_date") == d, body)
         check("day totals fat (sum)", t.get("fat_g") == 35)
         check("blank numbers skipped, not zero", t.get("calories") == 210 and t.get("protein_g") == 18)
         check("goal/remaining/over_goal", day.get("goal") == 20 and day.get("remaining") == 14.5
