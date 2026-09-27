@@ -327,3 +327,8 @@ button { cursor: pointer; }
 .daybar b { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--ink); }
 .daybar-ticks { display: flex; justify-content: space-between; font-size: var(--t-2xs); color: var(--muted-ink); }
 .fast.hist .fast-meta { margin: 0; }
+
+/* ---------- day change ---------- */
+.app #glance, .app #quick, .app #log, .app #more { transition: opacity .15s ease-out; }
+.app.switching #glance, .app.switching #quick, .app.switching #log, .app.switching #more { opacity: .35; }
+@media (prefers-reduced-motion: reduce) { .app #glance, .app #quick, .app #log, .app #more { transition: none; } }

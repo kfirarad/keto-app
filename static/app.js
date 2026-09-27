@@ -112,7 +112,8 @@ function load() {
     if (seq !== S.seq) return;
     S.day = d; S.week = w;
     render();
-  }).catch(e => { if (seq === S.seq) toast(e.message, null, null, true); });
+    slideIn();
+  }).catch(e => { if (seq === S.seq) { slideIn(); toast(e.message, null, null, true); } });
 }
 
 function loadLists() {
@@ -628,7 +629,25 @@ function toast(msg, undo, action, err) {
 }
 const fail = e => toast(e.message, null, null, true);
 
+/* Day change: the old day dims while loading, the new one slides in from the
+   side it came from (next day from the right). */
+const SLIDE_PARTS = ["#nav h1", "#glance", "#quick", "#log", "#more"];
+function slideIn() {
+  const dir = S.ui.slide;
+  S.ui.slide = 0;
+  document.querySelector(".app").classList.remove("switching");
+  if (!dir || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  SLIDE_PARTS.forEach((sel, i) => {
+    const el = document.querySelector(sel);
+    if (el && el.animate) el.animate(
+      [{ opacity: 0, transform: `translateX(${dir * 28}px)` }, { opacity: 1, transform: "none" }],
+      { duration: 260, delay: i * 30, easing: "cubic-bezier(.2,.7,.2,1)", fill: "backwards" });
+  });
+}
+
 function goTo(date) {
+  if (date !== S.date) S.ui.slide = dmyToIso(date) > dmyToIso(S.date) ? 1 : -1;
+  document.querySelector(".app").classList.toggle("switching", !!S.ui.slide);
   S.date = date;
   S.ui.expanded = null; S.ui.goalEdit = false; S.ui.fastEditId = null; S.ui.fastAdjust = false;
   load();
