@@ -143,6 +143,7 @@ def run_http_checks():
              + [{"item": "tea", "net_carbs_g": 0, "meal": "lunch"}])
         status, body = http(base, "GET", "/api/meals")
         check("meal names, most used first", status == 200 and json.loads(body)[:2] == ["breakfast", "lunch"], body)
+        run_import_checks(base)
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -288,7 +289,7 @@ def run_body_checks(base):
     check("water adds up, other readings unchanged", res["body"]["water_ml"] == 500
           and res["body"]["weight_kg"] == 79.4, res)
     status, res = post({"date": "02/03/2026", "add_water_ml": -1000})
-    check("water never goes below 0", res["body"]["water_ml"] == 0, res)
+    check("water never goes below 0", not res["body"]["water_ml"], res)
     status, res = post({"date": "02/03/2026", "weight_kg": 5})
     check("reject implausible weight", status == 400, res)
     status, res = post({"date": "02/03/2026", "water_ml": 1, "add_water_ml": 1})
@@ -296,11 +297,106 @@ def run_body_checks(base):
     status, body = http(base, "GET", "/api/day?date=02/03/2026")
     check("day payload includes body readings", json.loads(body)["body"]["weight_kg"] == 79.4, body)
 
+    def mpost(obj):
+        status, body = http(base, "POST", "/api/measurements", obj)
+        return status, json.loads(body)
+
+    status, res = mpost({"date": "02/03/2026", "time": "07:00", "weight_kg": 79.0, "bp_sys": 121,
+                         "bp_dia": 79, "pulse": 62, "notes": "אחרי ריצה"})
+    mid = res.get("measurement", {}).get("id")
+    b = res.get("body", {})
+    check("add measurement: latest weight wins, BP and pulse, Hebrew note", status == 201
+          and b["weight_kg"] == 79 and b["bp_sys"] == 121 and b["bp_dia"] == 79 and b["pulse"] == 62
+          and b["ketones_mmol"] == 1.5 and res["measurement"]["notes"] == "אחרי ריצה"
+          and len(b["measurements"]) == 2, res)
+    status, res = mpost({"date": "02/03/2026", "time": "06:00", "weight_kg": 78.0})
+    check("an earlier measurement does not replace the latest value",
+          status == 201 and res["body"]["weight_kg"] == 79, res)
+    status, res = mpost({"date": "02/03/2026", "bp_sys": 120})
+    check("reject half a blood pressure", status == 400, res)
+    status, res = mpost({"date": "02/03/2026", "notes": "nothing"})
+    check("reject a measurement with no values", status == 400, res)
+    status, body = http(base, "PATCH", f"/api/measurements/{mid}", {"weight_kg": None, "time": "08:30"})
+    res = json.loads(body)
+    check("update measurement clears a value", status == 200 and res["measurement"]["weight_kg"] is None
+          and res["measurement"]["time"] == "08:30" and res["body"]["weight_kg"] == 78, res)
+    status, body = http(base, "DELETE", f"/api/measurements/{mid}")
+    res = json.loads(body)
+    check("delete measurement", status == 200 and res["body"]["bp_sys"] is None
+          and res["deleted"]["id"] == mid, res)
+    status, body = http(base, "DELETE", f"/api/measurements/{mid}")
+    check("delete unknown measurement is 404", status == 404, body)
+    status, body = http(base, "GET", "/api/export.csv?table=measurements")
+    check("CSV export of measurements", status == 200 and "02/03/2026" in body and "bp_sys" in body, body[:200])
+
     status, body = http(base, "GET", "/api/export.csv?table=entries")
     check("CSV export has DD/MM/YYYY dates and Hebrew", status == 200
           and "02/03/2026" in body and "גבינה צהובה" in body and body.lstrip("\ufeff").startswith("id,"), body[:200])
     status, body = http(base, "GET", "/api/export.csv?table=nope")
     check("CSV export rejects unknown table", status == 400, body)
+
+
+SHEET_PASTE = (
+    "תאריך\tשעה\tצום\tפריט\n"
+    "10/03/2026\t10:00:00\t\tקפה Bulletproof\t20 גרם חמאה + 20 גרם שמן קוקוס\t310.0\t35.1\t0.2\t0.0\tצום שומן\n"
+    "10/03/2026\t13:00:00\t16.0\tמיקס עלים ירוקים\t100 גרם\t22.0\t0.4\t1.9\t2.2\tתווית\n"
+    "10/03/2026\t13:00:00\t\tטחינה גולמית\t50 גרם\t338.0\t28.0\t10.0\t4.0\t\n"
+    '10/03/2026\t13:00:00\t16.0\tסה"כ ארוחת צהריים\t\t360.0\t28.4\t11.9\t6.2\tשבירת צום\n'
+)
+
+
+def run_import_checks(base):
+    def imp(text, dry):
+        status, body = http(base, "POST", "/api/import", {"text": text, "dry_run": dry})
+        return status, json.loads(body)
+
+    status, res = imp(SHEET_PASTE, True)
+    check("import preview: header skipped, total row becomes the meal", status == 200
+          and res["new"] == 3 and res["duplicates"] == 0 and not res["created"]
+          and [t["meal"] for t in res["totals"]] == ["ארוחת צהריים"]
+          and [r["meal"] for r in res["rows"]] == [None, "ארוחת צהריים", "ארוחת צהריים"]
+          and res["rows"][1]["time"] == "13:00" and res["rows"][1]["fasting_hours"] == 16
+          and res["rows"][0]["calories"] == 310 and res["rows"][0]["net_carbs_g"] == 0, res)
+    status, body = http(base, "GET", "/api/day?date=10/03/2026")
+    check("import preview writes nothing", json.loads(body)["count"] == 0, body)
+    spaced = SHEET_PASTE.replace("\t", "    ")
+    status, res = imp(spaced, False)
+    check("import with tabs turned into spaces", status == 200 and len(res["created"]) == 3
+          and all(r["source"] == "sheet" for r in res["created"]), res)
+    status, body = http(base, "GET", "/api/day?date=10/03/2026")
+    day = json.loads(body)
+    check("imported day totals match the sheet's total row", day["totals"]["net_carbs_g"] == 6.2
+          and day["totals"]["fasting_hours"] == 16, body)
+    status, res = imp(SHEET_PASTE, False)
+    check("pasting again skips duplicates", status == 200 and res["duplicates"] == 3
+          and not res["created"], res)
+    status, res = imp("10/03/2026\t25:00\t\tx\t\t\t\t\t1\n10/03/2026\t09:00\t\ty\t\t\t\t\t1", False)
+    status2, body = http(base, "GET", "/api/day?date=10/03/2026")
+    check("a bad row blocks the whole import", status == 400 and "line 1" in res["error"]
+          and json.loads(body)["count"] == 3, res)
+    status, res = imp("hello", True)
+    check("import rejects text without date rows", status == 400, res)
+
+
+def check_body_migration():
+    """Old daily readings in body_log move to measurements; water stays."""
+    conn = db.connect()
+    with conn:
+        conn.execute("INSERT INTO body_log (log_date, weight_kg, glucose_mmol, water_ml, updated_at)"
+                     " VALUES ('2026-02-01', 83.5, 5.1, 750, 'x'), ('2026-02-02', 83.2, NULL, NULL, 'x')")
+    conn.close()
+    conn = db.connect()
+    rows = [tuple(r) for r in conn.execute(
+        "SELECT m_date, m_time, weight_kg, glucose_mmol FROM measurements"
+        " WHERE m_date < '2026-03-01' ORDER BY m_date")]
+    water = [tuple(r) for r in conn.execute("SELECT log_date, weight_kg, water_ml FROM body_log WHERE log_date < '2026-03-01'")]
+    conn.close()
+    db.connect().close()  # running again changes nothing
+    again = db.get_day("01/02/2026")["body"]
+    check("legacy body readings migrate to measurements",
+          rows == [("2026-02-01", None, 83.5, 5.1), ("2026-02-02", None, 83.2, None)]
+          and water == [("2026-02-01", None, 750)] and len(again["measurements"]) == 1
+          and again["weight_kg"] == 83.5 and again["water_ml"] == 750, (rows, water, again))
 
 
 def run_mcp_checks():
@@ -339,9 +435,10 @@ def run_mcp_checks():
         send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         r = recv()
         names = sorted(t["name"] for t in r.get("result", {}).get("tools", []))
-        check("MCP tools/list", names == ["add_entries", "delete_entry", "delete_fast", "get_day",
-                                          "log_body", "recent_days", "set_goal", "start_fast", "stop_fast",
-                                          "update_entry", "update_fast"], r)
+        check("MCP tools/list", names == ["add_entries", "add_measurement", "delete_entry", "delete_fast",
+                                          "delete_measurement", "get_day", "log_body", "recent_days",
+                                          "set_goal", "start_fast", "stop_fast", "update_entry",
+                                          "update_fast", "update_measurement"], r)
 
         send({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
             "name": "add_entries",
@@ -383,6 +480,15 @@ def run_mcp_checks():
         check("MCP set_goal", err is False and out["goal"] == 1 and out["over_goal"] is True, out)
         err, out = call(12, "log_body", {"date": "05/03/2026", "weight_kg": 81, "add_water_ml": 300})
         check("MCP log_body", err is False and out["weight_kg"] == 81 and out["water_ml"] == 300, out)
+        err, out = call(13, "add_measurement", {"date": "05/03/2026", "time": "07:10",
+                                                "bp_sys": 118, "bp_dia": 76, "pulse": 58})
+        mid = out.get("measurement", {}).get("id") if isinstance(out, dict) else None
+        check("MCP add_measurement", err is False and out["measurement"]["source"] == "mcp"
+              and out["body"]["bp_sys"] == 118 and out["body"]["weight_kg"] == 81, out)
+        err, out = call(14, "update_measurement", {"id": mid, "pulse": 61})
+        check("MCP update_measurement", err is False and out["measurement"]["pulse"] == 61, out)
+        err, out = call(15, "delete_measurement", {"id": mid})
+        check("MCP delete_measurement", err is False and out["body"]["bp_sys"] is None, out)
         err, out = call(9, "delete_entry", {"id": eid})
         check("MCP delete_entry", err is False and out["day"]["count"] == 0, out)
         err, out = call(10, "delete_entry", {"id": eid})
@@ -402,6 +508,7 @@ def main():
     try:
         run_http_checks()
         run_mcp_checks()
+        check_body_migration()
     except Exception as e:  # a crash is a failure, not a pass
         failures.append(f"exception: {e!r}")
         print(f"FAIL exception: {e!r}")

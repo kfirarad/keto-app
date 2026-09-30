@@ -64,7 +64,8 @@ CREATE TABLE IF NOT EXISTS fasts (
 );
 CREATE INDEX IF NOT EXISTS fasts_end_idx ON fasts (end_date);
 
--- Daily body readings: one row per day, any column may be empty.
+-- Daily water total: one row per day. The weight/ketones/glucose columns are
+-- legacy; their values were moved to measurements (see _migrate_body_log).
 CREATE TABLE IF NOT EXISTS body_log (
     log_date     TEXT PRIMARY KEY,
     weight_kg    REAL,
@@ -73,6 +74,24 @@ CREATE TABLE IF NOT EXISTS body_log (
     water_ml     REAL,
     updated_at   TEXT NOT NULL
 );
+
+-- Timed body measurements; each row has at least one value.
+CREATE TABLE IF NOT EXISTS measurements (
+    id           INTEGER PRIMARY KEY,
+    m_date       TEXT NOT NULL,
+    m_time       TEXT,
+    weight_kg    REAL,
+    ketones_mmol REAL,
+    glucose_mmol REAL,
+    bp_sys       REAL,
+    bp_dia       REAL,
+    pulse        REAL,
+    notes        TEXT,
+    source       TEXT NOT NULL CHECK (source IN ('ui', 'mcp', 'sheet')),
+    created_at   TEXT NOT NULL,
+    CHECK ((bp_sys IS NULL) = (bp_dia IS NULL))
+);
+CREATE INDEX IF NOT EXISTS measurements_date_idx ON measurements (m_date);
 
 -- A day's net-carb goal is the latest row on or before that day, else GOAL_NET_CARBS.
 CREATE TABLE IF NOT EXISTS day_goals (
@@ -114,7 +133,29 @@ def connect():
     conn.execute("PRAGMA busy_timeout = 10000")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.executescript(SCHEMA)
+    _migrate_body_log(conn)
     return conn
+
+
+def _migrate_body_log(conn):
+    """Move daily weight/ketones/glucose readings from body_log into
+    measurements (no time), leaving body_log with water only. Idempotent."""
+    legacy = ("weight_kg IS NOT NULL OR ketones_mmol IS NOT NULL"
+              " OR glucose_mmol IS NOT NULL")
+    if conn.execute(f"SELECT 1 FROM body_log WHERE {legacy} LIMIT 1").fetchone() is None:
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            "INSERT INTO measurements (m_date, m_time, weight_kg, ketones_mmol, glucose_mmol,"
+            " source, created_at) SELECT log_date, NULL, weight_kg, ketones_mmol, glucose_mmol,"
+            f" 'ui', updated_at FROM body_log WHERE {legacy}")
+        conn.execute("UPDATE body_log SET weight_kg = NULL, ketones_mmol = NULL, glucose_mmol = NULL")
+        conn.execute("DELETE FROM body_log WHERE water_ml IS NULL OR water_ml = 0")
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
 
 
 # ---- dates ---------------------------------------------------------------
@@ -389,7 +430,8 @@ def _first_iso(conn):
     first = conn.execute(
         "SELECT MIN(d) FROM (SELECT MIN(entry_date) AS d FROM entries"
         " UNION ALL SELECT MIN(start_date) FROM fasts"
-        " UNION ALL SELECT MIN(log_date) FROM body_log)").fetchone()[0]
+        " UNION ALL SELECT MIN(log_date) FROM body_log"
+        " UNION ALL SELECT MIN(m_date) FROM measurements)").fetchone()[0]
     return min(first or today_iso(), today_iso())
 
 
@@ -831,13 +873,17 @@ def set_goal(payload):
 
 # ---- body readings -------------------------------------------------------
 
-BODY_FIELDS = {
+MEASURE_FIELDS = {
     # field: (min, max) accepted, inclusive
     "weight_kg": (20, 400),
     "ketones_mmol": (0, 20),
     "glucose_mmol": (0.5, 40),
-    "water_ml": (0, 20000),
+    "bp_sys": (50, 260),
+    "bp_dia": (30, 160),
+    "pulse": (20, 250),
 }
+MEASURE_INPUT = ("date", "time", "notes") + tuple(MEASURE_FIELDS)
+WATER_MAX = 20000
 WEIGHT_HISTORY_DAYS = 30
 
 
@@ -856,68 +902,284 @@ def gki_band(gki):
     return "not in ketosis"
 
 
+def validate_measurement(obj):
+    """One measurement -> DB column values. At least one value; blood pressure
+    needs both numbers."""
+    _check_fields(obj, MEASURE_INPUT, "measurement")
+    row = {"m_date": parse_date(obj.get("date")), "m_time": parse_time(obj.get("time")),
+           "notes": _text(obj.get("notes"), "notes")}
+    for f, (lo, hi) in MEASURE_FIELDS.items():
+        v = _number(obj.get(f), f)
+        if v is not None and not lo <= v <= hi:
+            raise ValidationError(f"{f} must be between {lo} and {hi}")
+        row[f] = v
+    if (row["bp_sys"] is None) != (row["bp_dia"] is None):
+        raise ValidationError("blood pressure needs both bp_sys and bp_dia")
+    if row["bp_sys"] is not None and row["bp_sys"] <= row["bp_dia"]:
+        raise ValidationError("bp_sys must be higher than bp_dia")
+    if all(row[f] is None for f in MEASURE_FIELDS):
+        raise ValidationError("give at least one of: " + ", ".join(MEASURE_FIELDS))
+    return row
+
+
+def _measure_out(r):
+    out = {"id": r["id"], "date": format_date(r["m_date"]), "time": r["m_time"]}
+    for f in MEASURE_FIELDS:
+        out[f] = None if r[f] is None else _clean_num(r[f])
+    out.update(notes=r["notes"], source=r["source"], created_at=r["created_at"])
+    return out
+
+
+# Later in the day wins; untimed rows count as the start of the day.
+_M_ORDER = "ORDER BY m_date, m_time IS NOT NULL, m_time, id"
+
+
+def _latest_weights(conn, lo, hi):
+    """[(iso date, weight)] with the day's last weight, for lo < day <= hi."""
+    out = {}
+    for d, w in conn.execute(
+            "SELECT m_date, weight_kg FROM measurements WHERE m_date > ? AND m_date <= ?"
+            f" AND weight_kg IS NOT NULL {_M_ORDER}", (lo, hi)):
+        out[d] = w
+    return sorted(out.items())
+
+
 def _body(conn, iso):
-    r = conn.execute("SELECT * FROM body_log WHERE log_date = ?", (iso,)).fetchone()
-    vals = {f: (r[f] if r is not None else None) for f in BODY_FIELDS}
+    """The day's measurements, the latest value of each, GKI, weight trend and water."""
+    rows = conn.execute(f"SELECT * FROM measurements WHERE m_date = ? {_M_ORDER}", (iso,)).fetchall()
+    vals = {f: None for f in MEASURE_FIELDS}
+    for r in rows:
+        for f in MEASURE_FIELDS:
+            if r[f] is not None:
+                vals[f] = _clean_num(r[f])
     gki = None
     if vals["ketones_mmol"] and vals["glucose_mmol"] is not None:
         gki = _round(vals["glucose_mmol"] / vals["ketones_mmol"])
-    prev = conn.execute(
-        "SELECT log_date, weight_kg FROM body_log WHERE log_date < ? AND weight_kg IS NOT NULL"
-        " ORDER BY log_date DESC LIMIT 1", (iso,)).fetchone()
+    prev = _latest_weights(conn, "0000-00-00", (date.fromisoformat(iso) - timedelta(days=1)).isoformat())
+    prev = prev[-1] if prev else None
     since = (date.fromisoformat(iso) - timedelta(days=WEIGHT_HISTORY_DAYS)).isoformat()
-    weights = [{"date": format_date(d), "weight_kg": w} for d, w in conn.execute(
-        "SELECT log_date, weight_kg FROM body_log WHERE log_date > ? AND log_date <= ?"
-        " AND weight_kg IS NOT NULL ORDER BY log_date", (since, iso))]
+    weights = [{"date": format_date(d), "weight_kg": w} for d, w in _latest_weights(conn, since, iso)]
+    water = conn.execute("SELECT water_ml FROM body_log WHERE log_date = ?", (iso,)).fetchone()
     return {
         **vals,
+        "water_ml": water[0] if water else None,
         "gki": gki,
         "gki_band": gki_band(gki),
         "previous_weight": {"date": format_date(prev[0]), "weight_kg": prev[1]} if prev else None,
         "weight_change_kg": _round(vals["weight_kg"] - prev[1])
         if prev and vals["weight_kg"] is not None else None,
         "weights": weights,
+        "measurements": [_measure_out(r) for r in rows],
     }
 
 
-def log_body(payload):
-    """Set body readings for one day. payload: date (default today), any of
-    weight_kg, ketones_mmol, glucose_mmol, water_ml (null clears one), and
-    add_water_ml to add to the day's water. Omitted fields are unchanged.
-    Returns the day's body summary."""
-    _check_fields(payload, ("date", "add_water_ml") + tuple(BODY_FIELDS), "body")
+def _insert_measurement(conn, row, source, created_at):
+    cols = ("m_date", "m_time", "notes") + tuple(MEASURE_FIELDS)
+    cur = conn.execute(
+        f"INSERT INTO measurements ({', '.join(cols)}, source, created_at)"
+        f" VALUES ({', '.join('?' * (len(cols) + 2))})",
+        (*(row[c] for c in cols), source, created_at))
+    return cur.lastrowid
+
+
+def _get_measurement(conn, mid):
+    r = conn.execute("SELECT * FROM measurements WHERE id = ?", (mid,)).fetchone()
+    if r is None:
+        raise NotFoundError(f"measurement {mid} not found")
+    return r
+
+
+def add_measurement(payload, source):
+    """Insert one measurement. Returns (row, day body summary)."""
+    if source not in ("ui", "mcp", "sheet"):
+        raise ValueError("bad source")
+    row = validate_measurement(payload)
+    conn = connect()
+    try:
+        with conn:
+            mid = _insert_measurement(conn, row, source,
+                                      datetime.now(TZ).isoformat(timespec="seconds"))
+        return _measure_out(_get_measurement(conn, mid)), _body(conn, row["m_date"])
+    finally:
+        conn.close()
+
+
+def update_measurement(measure_id, changes):
+    """Change some fields; null clears one. Returns (row, body of its new day)."""
+    mid = _id(measure_id, "measurement")
+    if not isinstance(changes, dict):
+        raise ValidationError("changes must be a JSON object")
+    changes = {k: v for k, v in changes.items() if k not in ("id", "source", "created_at")}
+    _check_fields(changes, MEASURE_INPUT, "changes")
+    if not changes:
+        raise ValidationError("no fields to change")
+    conn = connect()
+    try:
+        with conn:
+            old = _measure_out(_get_measurement(conn, mid))
+            merged = {k: old[k] for k in MEASURE_INPUT}
+            merged.update(changes)
+            r = validate_measurement(merged)
+            sets = ", ".join(f"{c} = ?" for c in r)
+            conn.execute(f"UPDATE measurements SET {sets} WHERE id = ?", (*r.values(), mid))
+        return _measure_out(_get_measurement(conn, mid)), _body(conn, r["m_date"])
+    finally:
+        conn.close()
+
+
+def delete_measurement(measure_id):
+    """Delete one measurement. Returns (deleted row, body of its day)."""
+    mid = _id(measure_id, "measurement")
+    conn = connect()
+    try:
+        with conn:
+            old = _get_measurement(conn, mid)
+            conn.execute("DELETE FROM measurements WHERE id = ?", (mid,))
+        return _measure_out(old), _body(conn, old["m_date"])
+    finally:
+        conn.close()
+
+
+def log_body(payload, source="ui"):
+    """Water for one day, and (for older callers) a quick measurement.
+
+    payload: date (default today), water_ml (set; null clears) or add_water_ml
+    (add to the day's total), and any of weight_kg, ketones_mmol, glucose_mmol,
+    which are saved as a new measurement at the current time (no time when the
+    date is not today). Returns the day's body summary."""
+    readings = ("weight_kg", "ketones_mmol", "glucose_mmol")
+    _check_fields(payload, ("date", "water_ml", "add_water_ml") + readings, "body")
     iso = parse_date(payload.get("date"))
-    changes = {}
-    for f, (lo, hi) in BODY_FIELDS.items():
-        if f in payload:
-            v = _number(payload[f], f)
-            if v is not None and not lo <= v <= hi:
-                raise ValidationError(f"{f} must be between {lo} and {hi}")
-            changes[f] = v
+    measure = {f: payload[f] for f in readings if payload.get(f) is not None}
     add = _number(payload.get("add_water_ml"), "add_water_ml")
-    if add is not None and "water_ml" in changes:
+    set_water = "water_ml" in payload
+    if set_water and add is not None:
         raise ValidationError("give water_ml or add_water_ml, not both")
-    if not changes and add is None:
+    water = _number(payload.get("water_ml"), "water_ml") if set_water else None
+    if water is not None and not 0 <= water <= WATER_MAX:
+        raise ValidationError(f"water_ml must be between 0 and {WATER_MAX}")
+    if not measure and add is None and not set_water:
         raise ValidationError("no readings given")
+    mrow = None
+    if measure:
+        mrow = validate_measurement({"date": format_date(iso),
+                                     "time": now_hhmm() if iso == today_iso() else None,
+                                     **measure})
     now = datetime.now(TZ).isoformat(timespec="seconds")
     conn = connect()
     try:
         with conn:
-            conn.execute("INSERT OR IGNORE INTO body_log (log_date, updated_at) VALUES (?, ?)",
-                         (iso, now))
-            if add is not None:
-                cur = conn.execute("SELECT water_ml FROM body_log WHERE log_date = ?",
-                                   (iso,)).fetchone()[0] or 0
-                changes["water_ml"] = min(max(0.0, cur + add), BODY_FIELDS["water_ml"][1])
-            sets = ", ".join(f"{f} = ?" for f in changes)
-            conn.execute(f"UPDATE body_log SET {sets}, updated_at = ? WHERE log_date = ?",
-                         (*changes.values(), now, iso))
-            conn.execute("DELETE FROM body_log WHERE log_date = ? AND weight_kg IS NULL AND"
-                         " ketones_mmol IS NULL AND glucose_mmol IS NULL AND"
-                         " (water_ml IS NULL OR water_ml = 0)", (iso,))
+            if mrow:
+                _insert_measurement(conn, mrow, source, now)
+            if add is not None or set_water:
+                conn.execute("INSERT OR IGNORE INTO body_log (log_date, updated_at) VALUES (?, ?)",
+                             (iso, now))
+                if add is not None:
+                    cur = conn.execute("SELECT water_ml FROM body_log WHERE log_date = ?",
+                                       (iso,)).fetchone()[0] or 0
+                    water = min(max(0.0, cur + add), WATER_MAX)
+                conn.execute("UPDATE body_log SET water_ml = ?, updated_at = ? WHERE log_date = ?",
+                             (water, now, iso))
+                conn.execute("DELETE FROM body_log WHERE log_date = ? AND"
+                             " (water_ml IS NULL OR water_ml = 0)", (iso,))
         return {"date": format_date(iso), **_body(conn, iso)}
     finally:
         conn.close()
+
+
+# ---- import from the old Google Sheet -------------------------------------
+
+SHEET_COLUMNS = ("date", "time", "fasting_hours", "item", "quantity", "calories",
+                 "fat_g", "protein_g", "net_carbs_g", "notes")
+_TOTAL_RE = re.compile(r'^\s*סה["״\']?כ\s*')
+_SHEET_TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})(?::\d{2})?$")
+
+
+def _sheet_cells(line):
+    """Cells of one pasted row: tab-separated, or runs of four spaces when the
+    tabs were turned into spaces on the way."""
+    cells = line.split("\t") if "\t" in line else re.split(r" {4}", line)
+    return [c.strip() for c in cells]
+
+
+def parse_sheet(text):
+    """Rows pasted from the sheet, in its column order: date, time, fasting
+    hours, item, quantity, calories, fat, protein, net carbs, notes.
+
+    Returns (entries, totals, errors). A row whose item starts with סה"כ is a
+    meal total: it is not imported, and its name (after סה"כ) becomes the meal
+    of the rows with the same date and time. Lines that do not start with a
+    DD/MM/YYYY date (headers, blank lines) are ignored."""
+    if not isinstance(text, str) or not text.strip():
+        raise ValidationError("paste some rows first")
+    entries, totals, errors = [], [], []
+    for n, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        cells = _sheet_cells(line.rstrip("\r"))
+        if not _DATE_RE.match(cells[0]):
+            continue
+        cells = (cells + [""] * len(SHEET_COLUMNS))[:len(SHEET_COLUMNS)]
+        raw = dict(zip(SHEET_COLUMNS, cells))
+        t = _SHEET_TIME_RE.match(raw["time"])
+        if raw["time"] and t:
+            raw["time"] = f"{int(t.group(1)):02d}:{t.group(2)}"
+        m = _TOTAL_RE.match(raw["item"])
+        if m:
+            totals.append({"line": n, "date": raw["date"], "time": raw["time"] or None,
+                           "item": raw["item"], "meal": raw["item"][m.end():].strip() or None,
+                           "net_carbs_g": raw["net_carbs_g"] or None})
+            continue
+        try:
+            row = validate_entry({k: (v or None) for k, v in raw.items()})
+        except ValidationError as e:
+            errors.append(f"line {n}: {e}")
+            continue
+        row["line"] = n
+        entries.append(row)
+    meals = {(parse_date(t["date"]), t["time"]): t["meal"] for t in totals if t["meal"]}
+    for r in entries:
+        if r["meal"] is None:
+            r["meal"] = meals.get((r["entry_date"], r["entry_time"]))
+    if not entries and not totals and not errors:
+        raise ValidationError("no rows found: each row must start with a DD/MM/YYYY date")
+    return entries, totals, errors
+
+
+def _is_duplicate(conn, r):
+    return conn.execute(
+        "SELECT 1 FROM entries WHERE entry_date = ? AND entry_time IS ? AND item = ?"
+        " AND quantity IS ? LIMIT 1",
+        (r["entry_date"], r["entry_time"], r["item"], r["quantity"])).fetchone() is not None
+
+
+def import_sheet(text, dry_run=False):
+    """Parse pasted sheet rows and add the new ones (source "sheet"). Rows that
+    match an existing entry (date, time, item, quantity) are skipped. With
+    dry_run, nothing is written. Any bad row blocks the whole import."""
+    entries, totals, errors = parse_sheet(text)
+    conn = connect()
+    try:
+        dup = [_is_duplicate(conn, r) for r in entries]
+        rows = [{**{k: v for k, v in _row_out({**r, "id": None, "source": "sheet",
+                                                "created_at": None}).items()
+                    if k in ENTRY_FIELDS},
+                 "line": r["line"], "duplicate": d} for r, d in zip(entries, dup)]
+        result = {"rows": rows, "totals": totals, "errors": errors,
+                  "new": dup.count(False), "duplicates": dup.count(True), "created": []}
+        if dry_run:
+            return result
+        if errors:
+            raise ValidationError("fix these rows first: " + "; ".join(errors))
+        new = [r for r, d in zip(rows, dup) if not d]
+        if not new:
+            return result
+    finally:
+        conn.close()
+    created, _ = add_entries([{k: v for k, v in r.items() if k in ENTRY_FIELDS} for r in new],
+                             "sheet")
+    result["created"] = created
+    return result
 
 
 # ---- export --------------------------------------------------------------
@@ -926,7 +1188,8 @@ EXPORT_TABLES = {
     "entries": ("SELECT * FROM entries ORDER BY entry_date, entry_time IS NULL, entry_time, id",
                 ("entry_date",)),
     "fasts": ("SELECT * FROM fasts ORDER BY start_date, start_time, id", ("start_date", "end_date")),
-    "body": ("SELECT * FROM body_log ORDER BY log_date", ("log_date",)),
+    "measurements": ("SELECT * FROM measurements " + _M_ORDER, ("m_date",)),
+    "body": ("SELECT log_date, water_ml, updated_at FROM body_log ORDER BY log_date", ("log_date",)),
 }
 
 

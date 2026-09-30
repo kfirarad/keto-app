@@ -3,3 +3,4 @@ data/keto.sqlite-wal
 data/keto.sqlite-shm
 __pycache__/
 .claude/scheduled_tasks.lock
+data/*.bak-*

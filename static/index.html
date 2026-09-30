@@ -18,10 +18,13 @@
   <section id="quick" aria-label="Log again"></section>
   <section id="log" aria-label="Entries"></section>
   <section class="more" id="more" aria-label="Week, fasting and body"></section>
-  <footer class="foot">Export CSV:
+  <footer class="foot">
+    <p><button type="button" class="link" data-act="import-open">Import from sheet</button></p>
+    <p>Export CSV:
     <a class="link" href="/api/export.csv?table=entries">entries</a> ·
     <a class="link" href="/api/export.csv?table=fasts">fasts</a> ·
-    <a class="link" href="/api/export.csv?table=body">body</a>
+    <a class="link" href="/api/export.csv?table=measurements">measurements</a> ·
+    <a class="link" href="/api/export.csv?table=body">water</a></p>
   </footer>
 </main>
 

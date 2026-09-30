@@ -84,7 +84,9 @@ const S = {
   day: null, week: null,
   top: [], foods: [], meals: [], sugg: [],
   fastTarget: loadTarget(),
-  pendingFastHours: null,     // hours of a fast just stopped, for the meal that breaks it
+  pendingFastHours: null,
+  measure: null,              // the measurement being added or edited
+  imp: { text: "", res: null, err: "", busy: false },     // hours of a fast just stopped, for the meal that breaks it
   seq: 0,
   ui: { sheet: null, expanded: null, editingId: null, goalEdit: false, fastEditId: null, toast: null,
         copyIds: [], copyTarget: null, error: "", busy: false,
@@ -433,12 +435,25 @@ function renderFasting(d) {
     </details>`;
 }
 
+const MEASURE = [
+  // field, label, unit, input mode
+  ["weight_kg", "Weight", "kg"],
+  ["ketones_mmol", "Ketones", "mmol/L"],
+  ["glucose_mmol", "Glucose", "mmol/L"],
+  ["pulse", "Pulse", "bpm"],
+];
+// "82.4 kg · BP 121/79 · pulse 62 · ketones 1.8 · glucose 4.9"
+function measureText(m) {
+  return [m.weight_kg != null && `${g(m.weight_kg)} kg`, m.bp_sys != null && `BP ${g(m.bp_sys)}/${g(m.bp_dia)}`,
+    m.pulse != null && `pulse ${g(m.pulse)}`, m.ketones_mmol != null && `ketones ${g(m.ketones_mmol)}`,
+    m.glucose_mmol != null && `glucose ${g(m.glucose_mmol)}`].filter(Boolean).join(" · ");
+}
+
 function renderBody(d) {
   const b = d.body;
   if (!b) return "";
-  const sum = [b.weight_kg != null && `${g(b.weight_kg)} kg`, b.ketones_mmol != null && `ketones ${g(b.ketones_mmol)}`,
-    b.glucose_mmol != null && `glucose ${g(b.glucose_mmol)}`, b.gki != null && `GKI ${g(b.gki)}`,
-    b.water_ml && `${kcal(b.water_ml)} ml water`].filter(Boolean).join(" · ") || "no readings";
+  const sum = [measureText(b), b.gki != null && `GKI ${g(b.gki)}`, b.water_ml && `${kcal(b.water_ml)} ml water`]
+    .filter(Boolean).join(" · ") || "no measurements";
   const delta = b.weight_change_kg;
   const stats = [
     delta != null ? `${delta > 0 ? "+" : delta < 0 ? "−" : "±"}${g(Math.abs(delta))} kg since ${b.previous_weight.date.slice(0, 5)}` : "",
@@ -456,17 +471,17 @@ function renderBody(d) {
       <p class="muted num" style="display:flex;justify-content:space-between"><span>${first.date.slice(0, 5)} · ${g(first.weight_kg)} kg</span><span>30 days</span><span>${g(lastW.weight_kg)} kg</span></p>
     </div>`;
   }
-  const v = k => b[k] == null ? "" : tidy(b[k]);
+  const list = b.measurements.map(m => `<li>
+      <span class="t num">${m.time || `<span class="none">–</span>`}</span>
+      <span class="mv num">${measureText(m)}${m.notes ? `<small>${ut(m.notes)}</small>` : ""}</span>
+      <button type="button" class="btn" data-act="measure-edit" data-id="${m.id}">Edit</button>
+      <button type="button" class="btn btn-danger" data-act="measure-delete" data-id="${m.id}">Delete</button></li>`).join("");
   return `
     <details data-sec="body"${S.ui.open.body ? " open" : ""}>
       <summary><span class="eyebrow">Body</span><span class="sum num">${sum}</span></summary>
       <div class="panel">
-        <form class="grid3" data-form="body" novalidate>
-          <label class="field">Weight, kg<input name="weight_kg" inputmode="decimal" value="${v("weight_kg")}"></label>
-          <label class="field">Ketones, mmol/L<input name="ketones_mmol" inputmode="decimal" value="${v("ketones_mmol")}"></label>
-          <label class="field">Glucose, mmol/L<input name="glucose_mmol" inputmode="decimal" value="${v("glucose_mmol")}"></label>
-          <div class="row-btns" style="grid-column:1/-1"><button class="btn btn-primary">Save readings</button></div>
-        </form>
+        ${list ? `<ul class="measures">${list}</ul>` : `<p class="muted">No measurements this day.</p>`}
+        <div class="row-btns"><button type="button" class="btn btn-primary" data-act="measure-add">Add measurement</button></div>
         ${stats ? `<p class="num">${stats}</p>` : ""}
         ${spark}
         <div class="water">
@@ -485,12 +500,14 @@ function renderPinbar(d) {
   const c = d.totals.net_carbs_g || 0, over = d.over_goal;
   return `<div class="pinbar-in">
     <span class="left tone${over ? " over" : ""}"><b class="num">${g(Math.abs(d.goal - c))} g</b>${over ? "over" : "left"}</span>
+    <button type="button" class="btn" data-act="measure-add">Measure</button>
     <button type="button" class="btn btn-primary" data-act="open-add">Add food</button></div>`;
 }
 
 function renderSheet(d) {
   if (!S.ui.sheet) return "";
-  const inner = S.ui.sheet === "copy" ? renderCopyPanel(d) : renderAddForm(d);
+  const inner = S.ui.sheet === "copy" ? renderCopyPanel(d) : S.ui.sheet === "measure" ? renderMeasureForm(d)
+    : S.ui.sheet === "import" ? renderImport() : renderAddForm(d);
   return `<div class="scrim" data-act="close-sheet"></div>
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title"><div class="grab" aria-hidden="true"></div>${inner}</div>`;
 }
@@ -582,6 +599,65 @@ function renderPreview(d) {
 function renderMoreSummary() {
   const f = S.form;
   return [(f.date || S.date).slice(0, 5), f.time, f.meal && ut(f.meal), f.fasting_hours && `${esc(f.fasting_hours)} h fast`, f.notes && "note"].filter(Boolean).join(" · ");
+}
+
+function renderMeasureForm(d) {
+  const m = S.measure, editing = m.id != null;
+  const v = k => m[k] == null ? "" : esc(m[k]);
+  const fields = MEASURE.map(([k, label, unit]) =>
+    `<label class="field">${label}, ${unit}<input name="${k}" inputmode="decimal" value="${v(k)}"></label>`).join("");
+  return `
+    <div class="sheet-h"><h2 id="sheet-title">${editing ? "Edit measurement" : "Add measurement"}</h2><button type="button" class="icon-btn" data-act="close-sheet" aria-label="Close">&times;</button></div>
+    <form class="form" data-form="measure" autocomplete="off" novalidate>
+      <div class="grid2">
+        <label class="field">Date<input type="date" name="date" value="${dmyToIso(m.date)}" max="${dmyToIso(today())}" required></label>
+        <label class="field">Time<input type="time" name="time" value="${v("time")}"></label>
+      </div>
+      <fieldset class="bp"><legend>Blood pressure, mmHg</legend>
+        <label class="field">Systolic<input name="bp_sys" inputmode="decimal" value="${v("bp_sys")}"></label>
+        <span aria-hidden="true">/</span>
+        <label class="field">Diastolic<input name="bp_dia" inputmode="decimal" value="${v("bp_dia")}"></label>
+      </fieldset>
+      <div class="grid2">${fields}</div>
+      <label class="field">Notes<input name="notes" dir="auto" value="${v("notes")}"></label>
+      <p class="error" id="form-error" role="alert">${esc(S.ui.error)}</p>
+      <div class="sheet-actions">
+        <button type="button" class="btn" data-act="close-sheet">Cancel</button>
+        <button class="btn btn-primary"${S.ui.busy ? " disabled" : ""}>${editing ? "Save" : "Add"}</button>
+      </div>
+    </form>`;
+}
+
+function renderImport() {
+  const im = S.imp;
+  return `
+    <div class="sheet-h"><h2 id="sheet-title">Import from sheet</h2><button type="button" class="icon-btn" data-act="close-sheet" aria-label="Close">&times;</button></div>
+    <form class="form" data-form="import" novalidate>
+      <p class="muted hint">Paste rows copied from the Google Sheet, columns in this order: date, time, fasting hours, item, quantity, calories, fat, protein, net carbs, notes. Rows whose item starts with <bdi dir="rtl">סה"כ</bdi> are meal totals: they are skipped and name the meal of the rows at the same time. Rows already in the log are skipped.</p>
+      <label class="field">Rows<textarea name="text" dir="ltr" rows="7" spellcheck="false" placeholder="30/09/2026&#9;10:00:00&#9;&#9;קפה&#9;…">${esc(im.text)}</textarea></label>
+      <div id="imp-preview">${renderImportPreview()}</div>
+      <div class="sheet-actions">
+        <button type="button" class="btn" data-act="close-sheet">Cancel</button>
+        <button class="btn btn-primary" id="imp-go"${importReady() ? "" : " disabled"}>${importLabel()}</button>
+      </div>
+    </form>`;
+}
+function importReady() { const r = S.imp.res; return !!r && !S.imp.busy && !S.imp.err && !r.errors.length && r.new > 0; }
+function importLabel() { const r = S.imp.res; return r && r.new ? `Import ${r.new} ${r.new === 1 ? "row" : "rows"}` : "Import"; }
+function renderImportPreview() {
+  const im = S.imp, r = im.res;
+  if (im.err) return `<p class="error" role="alert">${esc(im.err)}</p>`;
+  if (!r) return "";
+  const head = [`${r.new} new`, r.duplicates && `${r.duplicates} already in the log`,
+    r.totals.length && `${r.totals.length} total ${r.totals.length === 1 ? "row" : "rows"} skipped`].filter(Boolean).join(" · ");
+  const errs = r.errors.map(e => `<li>${esc(e)}</li>`).join("");
+  const rows = r.rows.map(x => `<li class="${x.duplicate ? "dup" : ""}">
+      <span class="num muted">${x.date.slice(0, 5)} ${x.time || "–"}</span>
+      <span class="it">${ut(x.item)}${x.meal ? ` <small>${ut(x.meal)}</small>` : ""}${x.fasting_hours ? ` <small class="num">${g(x.fasting_hours)} h fast</small>` : ""}</span>
+      <span class="num">${x.duplicate ? "logged" : `${g(x.net_carbs_g)} g`}</span></li>`).join("");
+  return `<p class="num" role="status">${head}</p>
+    ${errs ? `<ul class="error imp-errors">${errs}</ul>` : ""}
+    ${rows ? `<ul class="copy-list imp-rows">${rows}</ul>` : ""}`;
 }
 
 function renderCopyPanel(d) {
@@ -770,6 +846,51 @@ function stopFast(at) {
   }).catch(fail);
 }
 
+/* ---------- measurements ---------- */
+const MEASURE_KEYS = ["weight_kg", "ketones_mmol", "glucose_mmol", "bp_sys", "bp_dia", "pulse"];
+function openMeasure(m) {
+  S.measure = m ? { ...m } : { id: null, date: S.date, time: S.date === today() ? hm(now()) : "", notes: "" };
+  S.ui.sheet = "measure"; S.ui.error = ""; S.ui.busy = false;
+  render();
+  const el = document.querySelector("#sheet [name=bp_sys]"); if (el && !m) el.focus();
+}
+function measurePayload(m) {
+  const out = { date: m.date, time: m.time || null, notes: m.notes || null };
+  for (const k of MEASURE_KEYS) out[k] = m[k] ?? null;
+  return out;
+}
+function deleteMeasure(id) {
+  api(`/api/measurements/${id}`, { method: "DELETE" }).then(res => {
+    toast(`Deleted measurement${res.deleted.time ? ` at ${res.deleted.time}` : ""}`,
+      () => send("POST", "/api/measurements", measurePayload(res.deleted)));
+    return load();
+  }).catch(fail);
+}
+
+/* ---------- import from the sheet ---------- */
+let importTimer, importSeq = 0;
+function openImport() {
+  S.imp = { text: "", res: null, err: "", busy: false };
+  S.ui.sheet = "import";
+  render();
+  const el = document.querySelector("#sheet [name=text]"); if (el) el.focus();
+}
+function refreshImport() {
+  const p = document.getElementById("imp-preview"); if (p) p.innerHTML = renderImportPreview();
+  const b = document.getElementById("imp-go"); if (b) { b.disabled = !importReady(); b.textContent = importLabel(); }
+}
+// Dry run as the user pastes or types: what would be added, skipped or rejected.
+function previewImport() {
+  clearTimeout(importTimer);
+  const text = S.imp.text, seq = ++importSeq;
+  if (!text.trim()) { S.imp.res = null; S.imp.err = ""; refreshImport(); return; }
+  importTimer = setTimeout(() => {
+    send("POST", "/api/import", { text, dry_run: true })
+      .then(res => { if (seq === importSeq) { S.imp.res = res; S.imp.err = ""; refreshImport(); } })
+      .catch(e => { if (seq === importSeq) { S.imp.res = null; S.imp.err = e.message; refreshImport(); } });
+  }, 300);
+}
+
 function calcNet() {
   const val = n => parseFloat(String(document.querySelector(`[name=${n}]`)?.value || "").replace(",", ".")) || 0;
   const total = num(document.querySelector("[name=calc_total]")?.value || "");
@@ -822,6 +943,10 @@ document.addEventListener("click", ev => {
     case "fast-start": startFast(); return;
     case "fast-stop": stopFast(); return;
     case "fast-adjust": openFastAdjust(); return;
+    case "measure-add": openMeasure(); return;
+    case "measure-edit": { const m = (d.body?.measurements || []).find(x => x.id === id); if (m) openMeasure(m); return; }
+    case "measure-delete": deleteMeasure(id); return;
+    case "import-open": openImport(); return;
     case "fast-adjust-cancel": S.ui.fastAdjust = false; S.ui.fastError = ""; break;
     case "fast-shift": {
       const input = el.form.elements.start;
@@ -861,6 +986,7 @@ document.addEventListener("input", ev => {
     document.getElementById("copy-go").textContent = copyLabel();
     return;
   }
+  if (form === "import") { S.imp.text = t.value; previewImport(); return; }
   if (form !== "entry") return;
   const f = S.form;
   if (t.name === "item") {
@@ -909,13 +1035,6 @@ document.addEventListener("submit", ev => {
       .catch(e => { S.ui.goalError = e.message; render(); });
     return;
   }
-  if (kind === "body") {
-    const payload = { date: S.date };
-    for (const k of ["weight_kg", "ketones_mmol", "glucose_mmol"]) payload[k] = numOrNull(data.get(k));
-    S.ui.bodyError = "";
-    send("POST", "/api/body", payload).then(() => load()).catch(e => { S.ui.bodyError = e.message; render(); });
-    return;
-  }
   if (kind === "fast-toggle") {
     const at = fromLocal(data.get("at"));
     const body = at.date ? { date: at.date, time: at.time } : {};
@@ -938,6 +1057,37 @@ document.addEventListener("submit", ev => {
       notes: String(data.get("notes") || "").trim() ? data.get("notes") : null })
       .then(() => { S.ui.fastEditId = null; return load(); })
       .catch(err => { S.ui.fastError = err.message; render(); });
+    return;
+  }
+  if (kind === "measure") {
+    const m = { id: S.measure.id, date: data.get("date") ? isoToDmy(data.get("date")) : S.date,
+      time: data.get("time") || null, notes: String(data.get("notes") || "").trim() || null };
+    for (const k of MEASURE_KEYS) m[k] = numOrNull(data.get(k));
+    const err = (el, msg) => { S.ui.error = msg; document.getElementById("form-error").textContent = msg; if (el) fm.elements[el].focus(); };
+    const bad = MEASURE_KEYS.find(k => m[k] != null && isNaN(m[k]));
+    if (bad) return err(bad, "Numbers only.");
+    if ((m.bp_sys == null) !== (m.bp_dia == null)) return err(m.bp_sys == null ? "bp_sys" : "bp_dia", "Blood pressure needs both numbers.");
+    if (MEASURE_KEYS.every(k => m[k] == null)) return err("bp_sys", "Enter at least one value.");
+    S.ui.error = ""; S.ui.busy = true;
+    const editing = m.id != null, payload = measurePayload(m);
+    (editing ? send("PATCH", `/api/measurements/${m.id}`, payload) : send("POST", "/api/measurements", payload)).then(res => {
+      const saved = res.measurement;
+      closeSheet(); S.ui.open.body = true;
+      toast(`${editing ? "Saved" : "Added"} ${measureText(saved)}${saved.date !== S.date ? ` to ${saved.date.slice(0, 5)}` : ""}`,
+        editing ? null : () => api(`/api/measurements/${saved.id}`, { method: "DELETE" }));
+      if (saved.date !== S.date) goTo(saved.date); else load();
+    }).catch(e => { S.ui.busy = false; S.ui.error = e.message; render(); });
+    return;
+  }
+  if (kind === "import") {
+    S.imp.busy = true; refreshImport();
+    send("POST", "/api/import", { text: S.imp.text }).then(res => {
+      const ids = res.created.map(x => x.id);
+      closeSheet(); loadLists();
+      toast(`Imported ${ids.length} ${ids.length === 1 ? "row" : "rows"}${res.duplicates ? `, ${res.duplicates} already logged` : ""}`,
+        ids.length ? () => Promise.all(ids.map(id => api(`/api/entries/${id}`, { method: "DELETE" }))) : null);
+      if (ids.length) goTo(res.created[0].date); else load();
+    }).catch(e => { S.imp.busy = false; S.imp.err = e.message; refreshImport(); });
     return;
   }
   if (kind === "copy") {

@@ -24,6 +24,7 @@ STATIC_FILES = {
 
 ENTRY_PATH = re.compile(r"^/api/entries/(\d+)$")
 FAST_PATH = re.compile(r"^/api/fasts/(\d+)$")
+MEASURE_PATH = re.compile(r"^/api/measurements/(\d+)$")
 
 
 class HTTPError(Exception):
@@ -115,7 +116,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
         elif url.path == "/api/meals":
             self._json(200, db.meal_names())
-        elif url.path == "/api/entries" or ENTRY_PATH.match(url.path) or url.path.startswith("/api/fasts") or url.path in ("/api/goal", "/api/body"):
+        elif url.path == "/api/entries" or ENTRY_PATH.match(url.path) or url.path.startswith("/api/fasts") or url.path.startswith("/api/measurements") or url.path in ("/api/goal", "/api/body", "/api/import"):
             raise HTTPError(405, f"GET not allowed on {url.path}")
         else:
             raise HTTPError(404, f"not found: {url.path}")
@@ -137,6 +138,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"body": db.log_body(self._read_json())})
         elif path == "/api/goal":
             self._json(200, {"day": db.set_goal(self._read_json())})
+        elif path == "/api/measurements":
+            row, body = db.add_measurement(self._read_json(), source="ui")
+            self._json(201, {"measurement": row, "body": body})
+        elif path == "/api/import":
+            payload = self._read_json()
+            if not isinstance(payload, dict):
+                raise db.ValidationError("body must be {text, dry_run}")
+            self._json(200, db.import_sheet(payload.get("text"), bool(payload.get("dry_run"))))
         elif path in STATIC_FILES or path.startswith("/api/"):
             raise HTTPError(405, f"POST not allowed on {path}")
         else:
@@ -153,6 +162,11 @@ class Handler(BaseHTTPRequestHandler):
         if m:
             self._json(200, {"fast": db.update_fast(int(m.group(1)), self._read_json())})
             return
+        m = MEASURE_PATH.match(path)
+        if m:
+            row, body = db.update_measurement(int(m.group(1)), self._read_json())
+            self._json(200, {"measurement": row, "body": body})
+            return
         self._not_allowed()
 
     def _delete(self):
@@ -165,6 +179,11 @@ class Handler(BaseHTTPRequestHandler):
         m = FAST_PATH.match(path)
         if m:
             self._json(200, {"deleted": db.delete_fast(int(m.group(1)))})
+            return
+        m = MEASURE_PATH.match(path)
+        if m:
+            row, body = db.delete_measurement(int(m.group(1)))
+            self._json(200, {"deleted": row, "body": body})
             return
         self._not_allowed()
 

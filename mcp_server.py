@@ -38,6 +38,18 @@ _MOMENT_PROPS = {
     "notes": {"type": "string"},
 }
 
+MEASURE_PROPS = {
+    "date": {"type": "string", "description": "DD/MM/YYYY. Default: today (Europe/Copenhagen)."},
+    "time": {"type": ["string", "null"], "description": "HH:MM, 24h."},
+    "weight_kg": {"type": ["number", "null"]},
+    "ketones_mmol": {"type": ["number", "null"], "description": "Blood ketones, mmol/L."},
+    "glucose_mmol": {"type": ["number", "null"], "description": "Blood glucose, mmol/L."},
+    "bp_sys": {"type": ["number", "null"], "description": "Systolic, mmHg."},
+    "bp_dia": {"type": ["number", "null"], "description": "Diastolic, mmHg."},
+    "pulse": {"type": ["number", "null"], "description": "Beats per minute."},
+    "notes": {"type": ["string", "null"]},
+}
+
 TOOLS = [
     {
         "name": "add_entries",
@@ -133,20 +145,51 @@ TOOLS = [
     },
     {
         "name": "log_body",
-        "description": "Set body readings for one day: weight_kg, ketones_mmol, glucose_mmol "
-                       "(mmol/L), water_ml; or add_water_ml to add water. Omitted fields are "
-                       "unchanged, null clears one. Returns the readings with GKI and weight change.",
+        "description": "Water for one day: water_ml sets the total, add_water_ml adds to it. "
+                       "weight_kg, ketones_mmol, glucose_mmol (mmol/L) are saved as a new "
+                       "measurement (prefer add_measurement). Returns the day's body summary.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "date": {"type": "string", "description": "DD/MM/YYYY. Default: today."},
-                "weight_kg": {"type": ["number", "null"]},
-                "ketones_mmol": {"type": ["number", "null"]},
-                "glucose_mmol": {"type": ["number", "null"]},
+                "weight_kg": {"type": "number"},
+                "ketones_mmol": {"type": "number"},
+                "glucose_mmol": {"type": "number"},
                 "water_ml": {"type": ["number", "null"]},
                 "add_water_ml": {"type": "number"},
             },
             "additionalProperties": False,
+        },
+    },
+    {
+        "name": "add_measurement",
+        "description": "Log a body measurement at a date and time: any of weight_kg, "
+                       "ketones_mmol and glucose_mmol (blood, mmol/L), blood pressure bp_sys/bp_dia "
+                       "(mmHg, both together), pulse (bpm), notes. At least one value. "
+                       "Returns the measurement and the day's body summary (latest values, GKI).",
+        "inputSchema": {
+            "type": "object",
+            "properties": MEASURE_PROPS,
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "update_measurement",
+        "description": "Change fields of one measurement by id; null clears a value.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"id": {"type": "integer"}, **MEASURE_PROPS},
+            "required": ["id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "delete_measurement",
+        "description": "Delete one measurement by id.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"id": {"type": "integer"}},
+            "required": ["id"],
         },
     },
     {
@@ -253,7 +296,17 @@ def call_tool(name, args):
         changes = {k: v for k, v in args.items() if k != "id"}
         return {"fast": db.update_fast(args.get("id"), changes)}
     if name == "log_body":
-        return db.log_body(args)
+        return db.log_body(args, source="mcp")
+    if name == "add_measurement":
+        row, body = db.add_measurement(args, source="mcp")
+        return {"measurement": row, "body": body}
+    if name == "update_measurement":
+        changes = {k: v for k, v in args.items() if k != "id"}
+        row, body = db.update_measurement(args.get("id"), changes)
+        return {"measurement": row, "body": body}
+    if name == "delete_measurement":
+        row, body = db.delete_measurement(args.get("id"))
+        return {"deleted": row, "body": body}
     if name == "set_goal":
         return db.set_goal(args)
     if name == "delete_fast":
