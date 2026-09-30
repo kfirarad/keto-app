@@ -74,6 +74,15 @@ function loadTarget() {
 }
 function saveTarget(v) { try { localStorage.setItem("keto.fastTarget", String(v)); } catch (e) { /* private mode */ } }
 
+/* Glucose is stored in mmol/L; mg/dL is a display choice remembered per browser. */
+const MGDL = 18.016;
+function loadGluUnit() { try { return localStorage.getItem("keto.glucoseUnit") === "mgdl" ? "mgdl" : "mmol"; } catch (e) { return "mmol"; } }
+function saveGluUnit(u) { try { localStorage.setItem("keto.glucoseUnit", u); } catch (e) { /* private mode */ } }
+const gluUnitLabel = u => u === "mgdl" ? "mg/dL" : "mmol/L";
+// mmol/L -> the number shown in unit u (mg/dL as a whole number).
+const gluShow = (mmol, u = S.gluUnit) => u === "mgdl" ? String(Math.round(mmol * MGDL)) : g(mmol);
+const gluToMmol = (v, u = S.gluUnit) => u === "mgdl" ? Math.round(v / MGDL * 1000) / 1000 : v;
+
 function blankForm(keep) {
   return Object.assign({ item: "", quantity: "", weight: "", base: null, net_carbs_g: "", calories: "", fat_g: "", protein_g: "",
     date: "", time: hm(now()), meal: "", fasting_hours: "", notes: "", suggest: false }, keep || {});
@@ -84,6 +93,7 @@ const S = {
   day: null, week: null,
   top: [], foods: [], meals: [], sugg: [],
   fastTarget: loadTarget(),
+  gluUnit: loadGluUnit(),
   pendingFastHours: null,
   measure: null,              // the measurement being added or edited
   imp: { text: "", res: null, err: "", busy: false },     // hours of a fast just stopped, for the meal that breaks it
@@ -439,14 +449,13 @@ const MEASURE = [
   // field, label, unit, input mode
   ["weight_kg", "Weight", "kg"],
   ["ketones_mmol", "Ketones", "mmol/L"],
-  ["glucose_mmol", "Glucose", "mmol/L"],
   ["pulse", "Pulse", "bpm"],
 ];
 // "82.4 kg · BP 121/79 · pulse 62 · ketones 1.8 · glucose 4.9"
 function measureText(m) {
   return [m.weight_kg != null && `${g(m.weight_kg)} kg`, m.bp_sys != null && `BP ${g(m.bp_sys)}/${g(m.bp_dia)}`,
     m.pulse != null && `pulse ${g(m.pulse)}`, m.ketones_mmol != null && `ketones ${g(m.ketones_mmol)}`,
-    m.glucose_mmol != null && `glucose ${g(m.glucose_mmol)}`].filter(Boolean).join(" · ");
+    m.glucose_mmol != null && `glucose ${gluShow(m.glucose_mmol)}${S.gluUnit === "mgdl" ? " mg/dL" : ""}`].filter(Boolean).join(" · ");
 }
 
 function renderBody(d) {
@@ -618,6 +627,11 @@ function renderMeasureForm(d) {
         <span aria-hidden="true">/</span>
         <label class="field">Diastolic<input name="bp_dia" inputmode="decimal" value="${v("bp_dia")}"></label>
       </fieldset>
+      <div class="glu">
+        <label class="field"><span>Glucose, <span id="glu-unit">${gluUnitLabel(S.gluUnit)}</span></span><input name="glucose_mmol" inputmode="decimal" value="${m.glucose_mmol == null ? "" : gluShow(m.glucose_mmol)}"></label>
+        <div class="seg" role="group" aria-label="Glucose unit">${["mmol", "mgdl"].map(u =>
+          `<button type="button" class="btn" data-act="glu-unit" data-u="${u}" aria-pressed="${S.gluUnit === u}">${gluUnitLabel(u)}</button>`).join("")}</div>
+      </div>
       <div class="grid2">${fields}</div>
       <label class="field">Notes<input name="notes" dir="auto" value="${v("notes")}"></label>
       <p class="error" id="form-error" role="alert">${esc(S.ui.error)}</p>
@@ -944,6 +958,17 @@ document.addEventListener("click", ev => {
     case "fast-stop": stopFast(); return;
     case "fast-adjust": openFastAdjust(); return;
     case "measure-add": openMeasure(); return;
+    case "glu-unit": {
+      // Switch the unit, converting what is typed; the rest of the sheet keeps its input.
+      const u = el.dataset.u, input = el.form.elements.glucose_mmol, v = numOrNull(input.value);
+      if (u === S.gluUnit) return;
+      if (v != null && !isNaN(v)) input.value = gluShow(gluToMmol(v, S.gluUnit), u);
+      S.gluUnit = u; saveGluUnit(u);
+      document.getElementById("glu-unit").textContent = gluUnitLabel(u);
+      el.form.querySelectorAll("[data-act=glu-unit]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.u === u)));
+      paint("more", renderWeek() + renderFasting(d) + renderBody(d));
+      return;
+    }
     case "measure-edit": { const m = (d.body?.measurements || []).find(x => x.id === id); if (m) openMeasure(m); return; }
     case "measure-delete": deleteMeasure(id); return;
     case "import-open": openImport(); return;
@@ -1063,6 +1088,12 @@ document.addEventListener("submit", ev => {
     const m = { id: S.measure.id, date: data.get("date") ? isoToDmy(data.get("date")) : S.date,
       time: data.get("time") || null, notes: String(data.get("notes") || "").trim() || null };
     for (const k of MEASURE_KEYS) m[k] = numOrNull(data.get(k));
+    const [lo, hi] = S.gluUnit === "mgdl" ? [9, 720] : [0.5, 40];
+    if (m.glucose_mmol != null && !isNaN(m.glucose_mmol) && !(m.glucose_mmol >= lo && m.glucose_mmol <= hi)) {
+      S.ui.error = `Glucose must be between ${lo} and ${hi} ${gluUnitLabel(S.gluUnit)}.`;
+      document.getElementById("form-error").textContent = S.ui.error; fm.elements.glucose_mmol.focus(); return;
+    }
+    if (m.glucose_mmol != null && !isNaN(m.glucose_mmol)) m.glucose_mmol = gluToMmol(m.glucose_mmol);
     const err = (el, msg) => { S.ui.error = msg; document.getElementById("form-error").textContent = msg; if (el) fm.elements[el].focus(); };
     const bad = MEASURE_KEYS.find(k => m[k] != null && isNaN(m[k]));
     if (bad) return err(bad, "Numbers only.");

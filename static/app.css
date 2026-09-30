@@ -356,3 +356,9 @@ button { cursor: pointer; }
 .foot p { margin: 0 0 var(--s-2); }
 .foot .link { padding-left: 0; }
 .pinbar .btn:not(.btn-primary) { min-height: 48px; }
+.glu { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: var(--s-2); }
+.seg { display: flex; }
+.seg .btn { min-height: var(--tap); padding: 0 var(--s-3); font-size: var(--t-sm); }
+.seg .btn:first-child { border-radius: var(--r-2) 0 0 var(--r-2); }
+.seg .btn:last-child { border-radius: 0 var(--r-2) var(--r-2) 0; margin-left: -1px; }
+.seg .btn[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--surface); }
