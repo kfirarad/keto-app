@@ -444,8 +444,8 @@ function baseState() {
         body: { weight_kg: 82.4, ketones_mmol: 1.8, glucose_mmol: 4.9, water_ml: 250 },
       },
     },
-    fasts: [{ id: 3, start_at: "2026-09-25T20:00", end_at: "2026-09-26T16:10", notes: null }],
-    activeFast: { id: 4, start_at: "2026-09-26T22:30", notes: null },
+    fasts: [{ id: 3, start_at: "2026-09-25T20:00:00+02:00", end_at: "2026-09-26T16:10:00+02:00", notes: null }],
+    activeFast: { id: 4, start_at: "2026-09-26T22:30:00+02:00", notes: null },
     fastTarget: 16,
     ui: { sheet: null, expanded: null, editingId: null, goalEdit: false, fastEditId: null, toast: null, copyIds: [], open: { week: false, fast: false, body: false } },
     form: blankForm(),
@@ -498,8 +498,17 @@ function eatingWindow(entries) {
   const mins = (+b.slice(0, 2) * 60 + +b.slice(3)) - (+a.slice(0, 2) * 60 + +a.slice(3));
   return { from: a, to: b, mins };
 }
-const fastHours = f => ((f.end_at ? Date.parse(f.end_at + "+02:00") : now().getTime()) - Date.parse(f.start_at + "+02:00")) / 3.6e6;
-const fmtAt = iso => `${isoToDmy(iso.slice(0, 10)).slice(0, 5)} ${iso.slice(11, 16)}`;
+// start_at / end_at are full ISO strings with offset, as the API returns them.
+const fastHours = f => ((f.end_at ? Date.parse(f.end_at) : now().getTime()) - Date.parse(f.start_at)) / 3.6e6;
+const fmtAt = iso => `${dm(new Date(iso))} ${hm(new Date(iso))}`;
+/* datetime-local value (Copenhagen wall time) -> ISO instant */
+function fromLocal(v) {
+  const guess = new Date(v + "Z");
+  const off = Date.parse(isoLocal(guess) + "Z") - guess.getTime();
+  return new Date(guess.getTime() - off).toISOString();
+}
+/* form value -> number, keeping 0; empty or invalid -> null */
+const num = v => v === "" || v == null || Number.isNaN(+v) ? null : +v;
 
 function weekStrip() {
   const cols = [];
@@ -573,12 +582,12 @@ function renderGoal(d) {
 
 function renderFacts(d) {
   if (!d.entries.length) return "";
-  const t = totals(d.entries), k = t.calories || 1;
-  const pc = x => Math.round(x / k * 100) + "%";
+  const t = totals(d.entries), k = t.calories;
+  const pc = x => k > 0 ? ` (${Math.round(x / k * 100)}%)` : "";
   const w = eatingWindow(d.entries);
   const fasted = sorted(d.entries).find(x => x.fasting_hours)?.fasting_hours;
   return `
-    <p class="facts num"><span>${kcal(t.calories)} kcal</span> · <span>fat ${Math.round(t.fat_g)} g (${pc(t.fat_g * 9)})</span> · <span>protein ${Math.round(t.protein_g)} g (${pc(t.protein_g * 4)})</span> · <span>carbs (${pc(t.net_carbs_g * 4)})</span></p>
+    <p class="facts num"><span>${kcal(t.calories)} kcal</span> · <span>fat ${Math.round(t.fat_g)} g${pc(t.fat_g * 9)}</span> · <span>protein ${Math.round(t.protein_g)} g${pc(t.protein_g * 4)}</span>${k > 0 ? ` · <span>carbs${pc(t.net_carbs_g * 4)}</span>` : ""}</p>
     <p class="facts num"><span>Eating ${w.from}–${w.to} (${Math.floor(w.mins / 60)} h ${w.mins % 60} m)</span>${fasted ? ` · <span>${g(fasted)} h fasting</span>` : ""}</p>`;
 }
 
@@ -673,7 +682,7 @@ function renderWeek(d) {
 
 function renderFasting() {
   const f = S.activeFast;
-  const ended = S.fasts.filter(x => isoToDmy(x.end_at.slice(0, 10)) === S.date);
+  const ended = S.fasts.filter(x => dmy(new Date(x.end_at)) === S.date);
   const list = [...(f ? [f] : []), ...ended].map(x => {
     const h = fastHours(x);
     const text = x.end_at ? `${g(h)} h fast · ${fmtAt(x.start_at)} → ${fmtAt(x.end_at)}` : `Running · ${dur(h)} since ${fmtAt(x.start_at)}`;
@@ -683,8 +692,8 @@ function renderFasting() {
       <button type="button" class="btn btn-danger" data-act="fast-delete" data-id="${x.id}">Delete</button>
       ${editing ? `<form class="fast-edit" data-form="fast" data-id="${x.id}">
         <div class="grid2">
-          <label class="field">Start<input type="datetime-local" name="start" value="${x.start_at}" required></label>
-          <label class="field">End<input type="datetime-local" name="end" value="${x.end_at ?? ""}"></label>
+          <label class="field">Start<input type="datetime-local" name="start" value="${isoLocal(new Date(x.start_at))}" required></label>
+          <label class="field">End<input type="datetime-local" name="end" value="${x.end_at ? isoLocal(new Date(x.end_at)) : ""}"></label>
         </div>
         <label class="field">Notes<input name="notes" dir="auto" value="${esc(x.notes ?? "")}"></label>
         <div class="row-btns"><button class="btn btn-primary">Save</button><button type="button" class="link" data-act="fast-edit" data-id="${x.id}">Cancel</button></div>
@@ -918,8 +927,8 @@ document.addEventListener("click", ev => {
     case "calc-use": { const out = calcNet(); if (out != null) S.form.net_carbs_g = out; break; }
     case "copy-open": S.ui.sheet = "copy"; S.ui.copyIds = d.entries.map(x => x.id); S.ui.copyTarget = null; break;
     case "copy-meal": S.ui.sheet = "copy"; S.ui.copyIds = d.entries.filter(x => x.meal === el.dataset.meal).map(x => x.id); S.ui.copyTarget = null; break;
-    case "fast-start": S.activeFast = { id: NEXT_ID++, start_at: isoLocal(now()), notes: null }; break;
-    case "fast-stop": stopFast(isoLocal(now())); break;
+    case "fast-start": S.activeFast = { id: NEXT_ID++, start_at: now().toISOString(), notes: null }; break;
+    case "fast-stop": stopFast(now().toISOString()); break;
     case "fast-edit": S.ui.fastEditId = S.ui.fastEditId === id ? null : id; break;
     case "fast-delete":
       if (S.activeFast?.id === id) S.activeFast = null; else S.fasts = S.fasts.filter(f => f.id !== id);
@@ -979,16 +988,16 @@ document.addEventListener("toggle", ev => {
 document.addEventListener("submit", ev => {
   ev.preventDefault();
   const fm = ev.target, kind = fm.dataset.form, data = new FormData(fm), d = day();
-  if (kind === "goal") { d.goal = parseFloat(data.get("goal")) || d.goal; d.goal_source = "set"; S.ui.goalEdit = false; }
-  if (kind === "body") { d.body ||= {}; for (const k of ["weight_kg", "ketones_mmol", "glucose_mmol"]) d.body[k] = parseFloat(data.get(k)) || null; }
+  if (kind === "goal") { d.goal = num(data.get("goal")) ?? d.goal; d.goal_source = "set"; S.ui.goalEdit = false; }
+  if (kind === "body") { d.body ||= {}; for (const k of ["weight_kg", "ketones_mmol", "glucose_mmol"]) d.body[k] = num(data.get(k)); }
   if (kind === "fast-toggle") {
-    const at = data.get("at") || isoLocal(now());
+    const at = data.get("at") ? fromLocal(data.get("at")) : now().toISOString();
     if (S.activeFast) stopFast(at); else S.activeFast = { id: NEXT_ID++, start_at: at, notes: null };
   }
   if (kind === "fast") {
     const f = S.activeFast?.id === +fm.dataset.id ? S.activeFast : S.fasts.find(x => x.id === +fm.dataset.id);
-    Object.assign(f, { start_at: data.get("start"), notes: data.get("notes") || null });
-    if (data.get("end")) f.end_at = data.get("end");
+    Object.assign(f, { start_at: fromLocal(data.get("start")), notes: data.get("notes") || null });
+    if (data.get("end")) f.end_at = fromLocal(data.get("end"));
     if (f === S.activeFast && f.end_at) { S.fasts.push(f); S.activeFast = null; }
     S.ui.fastEditId = null;
   }
@@ -1002,8 +1011,8 @@ document.addEventListener("submit", ev => {
   }
   if (kind === "entry") {
     const f = S.form;
-    const entry = { item: f.item.trim(), quantity: f.quantity, net_carbs_g: +f.net_carbs_g, calories: +f.calories || null, fat_g: +f.fat_g || null, protein_g: +f.protein_g || null,
-      time: f.time, meal: f.meal || null, notes: f.notes || null, fasting_hours: +f.fasting_hours || null, source: "web" };
+    const entry = { item: f.item.trim(), quantity: f.quantity, net_carbs_g: num(f.net_carbs_g) ?? 0, calories: num(f.calories), fat_g: num(f.fat_g), protein_g: num(f.protein_g),
+      time: f.time, meal: f.meal || null, notes: f.notes || null, fasting_hours: num(f.fasting_hours), source: "web" };
     const target = f.date && f.date !== S.date ? (S.days[f.date] ||= { goal: 20, goal_source: "inherited", entries: [], body: null }) : d;
     if (S.ui.sheet === "edit") {
       Object.assign(target.entries.find(x => x.id === S.ui.editingId), entry);
