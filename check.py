@@ -484,10 +484,14 @@ def run_ai_checks(base):
     class Fake(BaseHTTPRequestHandler):
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])).decode("utf-8"))
-            fake["seen"].append({"path": self.path, "auth": self.headers.get("Authorization"), "body": body})
+            fake["seen"].append({"path": self.path, "auth": self.headers.get("Authorization"), "body": body,
+                                 "session": self.headers.get("x-opencode-session")})
+            status = fake["status"]
+            if fake.get("no_effort") and "reasoning_effort" in body:
+                status = 400
             out = json.dumps({"choices": [{"message": {"role": "assistant", "content": fake["reply"]}}]}
-                             if fake["status"] == 200 else {"error": {"message": "nope"}}).encode("utf-8")
-            self.send_response(fake["status"])
+                             if status == 200 else {"error": {"message": "unknown field reasoning_effort" if fake.get("no_effort") else "nope"}}).encode("utf-8")
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(out)))
             self.end_headers()
@@ -568,6 +572,13 @@ def run_ai_checks(base):
                                                          {"role": "user", "content": "c"}]})
         check("coach: plain reply, thread passed on", status == 200 and res == {"reply": "Plain advice.", "rows": []}
               and [m["role"] for m in fake["seen"][-1]["body"]["messages"]] == ["system", "user", "assistant", "user"], res)
+        first = fake["seen"][-1]["session"]
+        post("/api/ai/chat", {"messages": [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
+                                           {"role": "user", "content": "c"}, {"role": "assistant", "content": "d"},
+                                           {"role": "user", "content": "e"}]})
+        post("/api/ai/chat", {"messages": [{"role": "user", "content": "another chat"}]})
+        check("a session id is sent, the same through one chat and new for another", bool(first)
+              and fake["seen"][-2]["session"] == first and fake["seen"][-1]["session"] != first)
         check("coach: last message must be the user's",
               post("/api/ai/chat", {"messages": [{"role": "assistant", "content": "b"}]})[0] == 400
               and post("/api/ai/chat", {"messages": []})[0] == 400)
@@ -582,6 +593,12 @@ def run_ai_checks(base):
               and len(fake["seen"]) == n + 2)
         check("review: no full logged day is 400", post("/api/ai/summary", {"days": 3})[0] == 400)
 
+        fake["no_effort"] = True
+        n = len(fake["seen"])
+        status, res = post("/api/ai/chat", {"messages": [{"role": "user", "content": "hi"}]})
+        check("a model that refuses reasoning_effort is asked again without it", status == 200 and len(fake["seen"]) == n + 2
+              and fake["seen"][-2]["body"].get("reasoning_effort") == "low" and "reasoning_effort" not in fake["seen"][-1]["body"], res)
+        fake["no_effort"] = False
         fake["status"] = 429
         status, res = post("/api/ai/chat", {"messages": [{"role": "user", "content": "hi"}]})
         check("upstream error becomes 502 with a reason, no key", status == 502 and "rate limited" in res["error"]

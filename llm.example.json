@@ -3,5 +3,6 @@
   "base_url": "https://opencode.ai/zen/v1",
   "model": "space-bunny-free",
   "vision_model": "",
-  "timeout_s": 60
+  "reasoning_effort": "low",
+  "timeout_s": 90
 }

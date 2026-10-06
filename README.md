@@ -85,7 +85,10 @@ cp llm.example.json data/llm.json && chmod 600 data/llm.json
 - `base_url` — `https://opencode.ai/zen/v1` (pay-as-you-go and free models) or `https://opencode.ai/zen/go/v1` (Go subscription).
 - `model` — default `space-bunny-free`. Free models come and go; current ids: `curl -s https://opencode.ai/zen/v1/models`.
 - `vision_model` — a model that accepts images; empty hides the Photo button.
-- `timeout_s` — default 60.
+- `reasoning_effort` — default `low`, which keeps thinking models quick; it is left out automatically for a model that refuses it. Empty turns it off.
+- `timeout_s` — default 90.
+
+Every request carries a session id in `x-opencode-session` (one per coach chat), which the Go endpoint requires. OpenCode describes Go as meant for coding agents and says it watches traffic for other use; the pay-as-you-go `zen/v1` endpoint has no such note.
 
 The file is read on every call, so changes need no restart (reload the page). Without a key the app has no assistant UI and makes no outbound requests. With one, your words, photos, known foods and the log snapshot described above are sent to `base_url` over HTTPS; some free models state that prompts may be used for training, so check the model's terms. Code: `llm.py` (client), `assistant.py` (prompts and row checks).
 

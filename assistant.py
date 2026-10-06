@@ -45,7 +45,8 @@ COACH_SYSTEM = f"""You are a keto coach inside the user's personal food log. You
 - Be concrete and brief: a few short sentences or a short list. Use their numbers, goal and foods.
 - Answer in the language of the user's last message. Plain text only, no markdown, no tables.
 - Dates are DD/MM/YYYY. Net carbs are what counts against the daily goal.
-- You cannot change the log. When the user asks you to log food, or accepts food you suggested, finish your reply with a line that starts with LOG: followed by one JSON object {{"rows": [row, ...]}}; the app shows those rows for the user to review and save. Do not add LOG: otherwise.
+- Keep the whole reply under 150 words.
+- You cannot change the log, so never say that you added or logged something. When the user asks you to log food, or accepts food you suggested, say the rows are ready to review and finish your reply with a line that starts with LOG: followed by one JSON object {{"rows": [row, ...]}}; the app shows those rows for the user to review and save. Do not add LOG: otherwise.
 {ROW_RULES}
 - You are not a doctor. For worrying blood pressure, glucose or symptoms, say so briefly and point to a doctor."""
 
@@ -167,7 +168,9 @@ def chat(payload):
     while turns[0]["role"] != "user":
         turns.pop(0)
     system = "\n\n".join([COACH_SYSTEM, _known_foods(), "LOG DATA:\n" + _dump(_log_data(14))])
-    reply = llm.chat([{"role": "system", "content": system}] + turns, temperature=0.4)
+    # The thread's first message names the conversation for the model service.
+    session = hashlib.sha256(_dump(msgs[0]).encode("utf-8")).hexdigest()[:32]
+    reply = llm.chat([{"role": "system", "content": system}] + turns, temperature=0.4, session=session)
     rows = []
     parts = _LOG_RE.split(reply)
     if len(parts) > 1:
@@ -195,7 +198,7 @@ def summary(payload):
     if key in _summaries and not payload.get("refresh"):
         return _summaries[key]
     text = llm.chat([{"role": "system", "content": SUMMARY_SYSTEM},
-                     {"role": "user", "content": "LOG DATA:\n" + data}], max_tokens=600, temperature=0.4)
+                     {"role": "user", "content": "LOG DATA:\n" + data}], temperature=0.4)
     out = {"text": text.replace("**", "").strip(), "from": ins["from"], "to": ins["to"],
            "generated_at": datetime.now(db.TZ).strftime("%d/%m/%Y %H:%M"), "model": llm.status()["model"]}
     _summaries.clear()

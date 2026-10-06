@@ -11,6 +11,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+import uuid
 from urllib.parse import urlparse
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "llm.json")
@@ -19,9 +20,11 @@ DEFAULTS = {
     "base_url": "https://opencode.ai/zen/v1",
     "model": "space-bunny-free",
     "vision_model": "",          # a model that accepts images; empty turns photos off
-    "timeout_s": 60,
+    "reasoning_effort": "low",   # for thinking models; dropped if the model refuses it
+    "timeout_s": 90,
 }
 MAX_REPLY = 200_000
+_PROCESS_SESSION = uuid.uuid4().hex     # for one-off requests
 _THINK_RE = re.compile(r"<think>.*?</think>", re.S)
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
 
@@ -79,8 +82,9 @@ def _check_url(base_url):
         raise LLMError("LLM base_url must be https", 503)
 
 
-def chat(messages, vision=False, max_tokens=1500, temperature=0.2):
-    """Send a chat and return the reply text."""
+def chat(messages, vision=False, max_tokens=6000, temperature=0.2, session=None):
+    """Send a chat and return the reply text. `session` is a stable id for one
+    conversation; OpenCode routes and caches by it (x-opencode-session)."""
     cfg = config()
     if not (cfg["api_key"] and cfg["base_url"] and cfg["model"]):
         raise LLMError("the assistant is not set up (data/llm.json)", 503)
@@ -90,27 +94,48 @@ def chat(messages, vision=False, max_tokens=1500, temperature=0.2):
             raise LLMError("no vision model is set up for photos", 503)
         model = cfg["vision_model"]
     _check_url(cfg["base_url"])
-    body = json.dumps({"model": model, "messages": messages, "max_tokens": max_tokens,
-                       "temperature": temperature, "stream": False}).encode("utf-8")
-    req = urllib.request.Request(cfg["base_url"] + "/chat/completions", data=body, method="POST", headers={
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + cfg["api_key"],
-        "User-Agent": "keto-log/1",
-    })
+    body = {"model": model, "messages": messages, "max_tokens": max_tokens,
+            "temperature": temperature, "stream": False}
+    effort = str(cfg["reasoning_effort"] or "").strip()
+    if effort:
+        body["reasoning_effort"] = effort
     try:
         timeout = float(cfg["timeout_s"])
     except (TypeError, ValueError):
         timeout = DEFAULTS["timeout_s"]
-    try:
+
+    def post():
+        req = urllib.request.Request(
+            cfg["base_url"] + "/chat/completions", data=json.dumps(body).encode("utf-8"), method="POST",
+            headers={"Content-Type": "application/json",
+                     "Authorization": "Bearer " + cfg["api_key"],
+                     "User-Agent": "keto-log/1",
+                     "x-opencode-session": session or _PROCESS_SESSION})
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = r.read(MAX_REPLY + 1)
-    except urllib.error.HTTPError as e:
-        detail = ""
+            return r.read(MAX_REPLY + 1)
+
+    def detail_of(e):
         try:
             err = json.loads(e.read(4000).decode("utf-8", "replace"))
-            detail = err.get("error", {}).get("message") if isinstance(err.get("error"), dict) else err.get("error")
+            return err.get("error", {}).get("message") if isinstance(err.get("error"), dict) else err.get("error")
         except (ValueError, AttributeError):
-            pass
+            return ""
+
+    try:
+        try:
+            raw = post()
+        except urllib.error.HTTPError as e:
+            detail = detail_of(e)
+            # A model that does not take reasoning_effort: ask again without it.
+            if e.code != 400 or "reasoning_effort" not in body or "reasoning" not in str(detail):
+                e.keto_detail = detail
+                raise
+            del body["reasoning_effort"]
+            raw = post()
+    except urllib.error.HTTPError as e:
+        detail = getattr(e, "keto_detail", None)
+        if detail is None:
+            detail = detail_of(e)
         what = {401: "the API key was rejected", 403: "the API key may not use this model",
                 404: f"model {model!r} was not found", 429: "the model is rate limited, try again shortly"}
         raise LLMError(f"the model service answered {e.code}: {what.get(e.code) or detail or 'error'}")
