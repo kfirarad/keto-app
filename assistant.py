@@ -153,24 +153,35 @@ def _dump(obj):
 
 
 def chat(payload):
-    """Coach reply for a thread held by the browser. {reply, rows}."""
-    msgs = payload.get("messages") if isinstance(payload, dict) else None
-    if not isinstance(msgs, list) or not msgs:
-        raise db.ValidationError("messages must be a non-empty list")
-    turns = []
-    for m in msgs[-MAX_TURNS:]:
-        if not isinstance(m, dict) or m.get("role") not in ("user", "assistant") \
-                or not isinstance(m.get("content"), str) or not m["content"].strip():
-            raise db.ValidationError("each message needs role user or assistant and text content")
-        turns.append({"role": m["role"], "content": m["content"][:MAX_TURN_CHARS]})
-    if turns[-1]["role"] != "user":
-        raise db.ValidationError("the last message must be from the user")
+    """One coach turn in a chat stored in the database, so every device sees it.
+
+    {chat_id, message}: add the user's message (chat_id null starts a chat) and
+    answer it. {chat_id, retry: true}: answer the last message again after a
+    failure. Returns {chat}; on a model failure the user's message stays saved
+    and the error carries the chat.
+    """
+    if not isinstance(payload, dict):
+        raise db.ValidationError("body must be {chat_id, message}")
+    db._check_fields(payload, ("chat_id", "message", "retry"), "chat request")
+    cid = payload.get("chat_id")
+    if not llm.enabled():      # before saving anything
+        raise llm.LLMError("the assistant is not set up (data/llm.json)", 503)
+    if payload.get("retry"):
+        saved = db.get_chat(cid)
+        if not saved["messages"] or saved["messages"][-1]["role"] != "user":
+            raise db.ValidationError("nothing to retry in this chat")
+    else:
+        saved = db.add_chat_message(cid, "user", payload.get("message"))
+    turns = [{"role": m["role"], "content": m["content"][:MAX_TURN_CHARS]} for m in saved["messages"][-MAX_TURNS:]]
     while turns[0]["role"] != "user":
         turns.pop(0)
     system = "\n\n".join([COACH_SYSTEM, _known_foods(), "LOG DATA:\n" + _dump(_log_data(14))])
-    # The thread's first message names the conversation for the model service.
-    session = hashlib.sha256(_dump(msgs[0]).encode("utf-8")).hexdigest()[:32]
-    reply = llm.chat([{"role": "system", "content": system}] + turns, temperature=0.4, session=session)
+    session = hashlib.sha256(f"keto-chat-{saved['id']}-{saved['created_at']}".encode("utf-8")).hexdigest()[:32]
+    try:
+        reply = llm.chat([{"role": "system", "content": system}] + turns, temperature=0.4, session=session)
+    except llm.LLMError as e:
+        e.data = {"chat": saved}
+        raise
     rows = []
     parts = _LOG_RE.split(reply)
     if len(parts) > 1:
@@ -179,7 +190,7 @@ def chat(payload):
             rows, _ = _clean_rows(obj.get("rows"))
             reply = "LOG:".join(parts[:-1]).strip()
     reply = reply.replace("**", "").strip()
-    return {"reply": reply or "Here are the rows to review.", "rows": rows}
+    return {"chat": db.add_chat_message(saved["id"], "assistant", reply or "Here are the rows to review.", rows)}
 
 
 _summaries = {}     # (days, data hash) -> result; the same numbers give the same review

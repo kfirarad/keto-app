@@ -29,6 +29,7 @@ ENTRY_PATH = re.compile(r"^/api/entries/(\d+)$")
 FAST_PATH = re.compile(r"^/api/fasts/(\d+)$")
 MEASURE_PATH = re.compile(r"^/api/measurements/(\d+)$")
 NOTE_PATH = re.compile(r"^/api/notes/(\d+)$")
+CHAT_PATH = re.compile(r"^/api/chats/(\d+)$")
 
 
 class HTTPError(Exception):
@@ -67,7 +68,7 @@ class Handler(BaseHTTPRequestHandler):
         except db.ValidationError as e:
             self._json(400, {"error": str(e)})
         except llm.LLMError as e:
-            self._json(e.status, {"error": str(e)})
+            self._json(e.status, {"error": str(e), **getattr(e, "data", {})})
         except Exception:
             traceback.print_exc(file=sys.stderr)
             self._json(500, {"error": "internal server error"})
@@ -109,6 +110,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, db.recent_foods() if top is None else db.frequent_foods(top))
         elif url.path == "/api/days":
             self._json(200, db.days_overview(qs.get("end", [None])[0], qs.get("n", [None])[0]))
+        elif url.path == "/api/chats":
+            self._json(200, db.list_chats(qs.get("n", [None])[0]))
+        elif CHAT_PATH.match(url.path):
+            self._json(200, db.get_chat(int(CHAT_PATH.match(url.path).group(1))))
         elif url.path == "/api/ai":
             self._json(200, llm.status())
         elif url.path == "/api/insights":
@@ -208,6 +213,10 @@ class Handler(BaseHTTPRequestHandler):
         if m:
             row, body = db.delete_measurement(int(m.group(1)))
             self._json(200, {"deleted": row, "body": body})
+            return
+        m = CHAT_PATH.match(path)
+        if m:
+            self._json(200, {"deleted": db.delete_chat(int(m.group(1)))})
             return
         m = NOTE_PATH.match(path)
         if m:

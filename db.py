@@ -106,6 +106,24 @@ CREATE TABLE IF NOT EXISTS day_notes (
 );
 CREATE INDEX IF NOT EXISTS day_notes_date_idx ON day_notes (n_date);
 
+-- Coach chats, kept here so every device sees them. rows: JSON list of food
+-- rows the coach proposed with that message.
+CREATE TABLE IF NOT EXISTS chats (
+    id         INTEGER PRIMARY KEY,
+    title      TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id         INTEGER PRIMARY KEY,
+    chat_id    INTEGER NOT NULL REFERENCES chats (id) ON DELETE CASCADE,
+    role       TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    content    TEXT NOT NULL,
+    rows       TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS chat_messages_chat_idx ON chat_messages (chat_id, id);
+
 -- A day's net-carb goal is the latest row on or before that day, else GOAL_NET_CARBS.
 CREATE TABLE IF NOT EXISTS day_goals (
     goal_date      TEXT PRIMARY KEY,
@@ -1309,6 +1327,92 @@ def delete_note(note_id):
             old = _get_note(conn, nid)
             conn.execute("DELETE FROM day_notes WHERE id = ?", (nid,))
         return _note_out(old), _notes(conn, old["n_date"])
+    finally:
+        conn.close()
+
+
+# ---- coach chats ---------------------------------------------------------
+
+CHATS_DEFAULT = 30
+CHAT_TITLE_LEN = 60
+CHAT_MESSAGE_LEN = 4000
+
+
+def _chat_title(text):
+    """A chat is named after its first message."""
+    title = " ".join(text.split())
+    return title if len(title) <= CHAT_TITLE_LEN else title[:CHAT_TITLE_LEN - 1].rstrip() + "…"
+
+
+def _chat_out(conn, cid):
+    c = conn.execute("SELECT * FROM chats WHERE id = ?", (cid,)).fetchone()
+    if c is None:
+        raise NotFoundError(f"chat {cid} not found")
+    msgs = [{"id": m["id"], "role": m["role"], "content": m["content"],
+             "rows": json.loads(m["rows"]) if m["rows"] else [], "at": m["created_at"]}
+            for m in conn.execute("SELECT * FROM chat_messages WHERE chat_id = ? ORDER BY id", (cid,))]
+    return {"id": c["id"], "title": c["title"], "created_at": c["created_at"],
+            "updated_at": c["updated_at"], "messages": msgs}
+
+
+def list_chats(limit=None):
+    """Latest chats first: id, title, times and message count."""
+    n = CHATS_DEFAULT if limit is None else max(1, min(parse_recent_n(limit), 200))
+    conn = connect()
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT c.id, c.title, c.created_at, c.updated_at,"
+            " (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS messages"
+            " FROM chats c ORDER BY c.updated_at DESC, c.id DESC LIMIT ?", (n,))]
+    finally:
+        conn.close()
+
+
+def get_chat(chat_id):
+    conn = connect()
+    try:
+        return _chat_out(conn, _id(chat_id, "chat"))
+    finally:
+        conn.close()
+
+
+def add_chat_message(chat_id, role, content, rows=None):
+    """Append a message; chat_id None starts a chat named after this message.
+    Returns the chat."""
+    if role not in ("user", "assistant"):
+        raise ValueError("bad role")
+    if not isinstance(content, str) or not content.strip():
+        raise ValidationError("message must not be empty")
+    if role == "user" and len(content) > CHAT_MESSAGE_LEN:
+        raise ValidationError(f"message must be at most {CHAT_MESSAGE_LEN} characters")
+    now = datetime.now(TZ).isoformat(timespec="seconds")
+    conn = connect()
+    try:
+        with conn:
+            if chat_id is None:
+                cid = conn.execute("INSERT INTO chats (title, created_at, updated_at) VALUES (?, ?, ?)",
+                                   (_chat_title(content), now, now)).lastrowid
+            else:
+                cid = _id(chat_id, "chat")
+                if conn.execute("UPDATE chats SET updated_at = ? WHERE id = ?", (now, cid)).rowcount == 0:
+                    raise NotFoundError(f"chat {cid} not found")
+            conn.execute(
+                "INSERT INTO chat_messages (chat_id, role, content, rows, created_at) VALUES (?, ?, ?, ?, ?)",
+                (cid, role, content.strip(), json.dumps(rows, ensure_ascii=False) if rows else None, now))
+        return _chat_out(conn, cid)
+    finally:
+        conn.close()
+
+
+def delete_chat(chat_id):
+    cid = _id(chat_id, "chat")
+    conn = connect()
+    try:
+        with conn:
+            chat = _chat_out(conn, cid)
+            conn.execute("DELETE FROM chat_messages WHERE chat_id = ?", (cid,))
+            conn.execute("DELETE FROM chats WHERE id = ?", (cid,))
+        return {"id": chat["id"], "title": chat["title"]}
     finally:
         conn.close()
 

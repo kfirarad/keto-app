@@ -510,7 +510,7 @@ def run_ai_checks(base):
     status, body = http(base, "GET", "/api/ai")
     check("assistant is off without a key", status == 200 and json.loads(body) == {"enabled": False, "model": None, "vision": False}, body)
     check("assistant calls answer 503 when off", post("/api/ai/food", {"text": "2 eggs"})[0] == 503
-          and post("/api/ai/chat", {"messages": [{"role": "user", "content": "hi"}]})[0] == 503)
+          and post("/api/ai/chat", {"message": "hi"})[0] == 503)
 
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), Fake)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -562,26 +562,50 @@ def run_ai_checks(base):
 
         fake["reply"] = ("You have room for it. **Go ahead.**\nLOG: " + json.dumps({"rows": [
             {"item": "avocado", "quantity": "100 g", "net_carbs_g": 1.8, "calories": 160, "fat_g": 15, "protein_g": 2}]}))
-        status, res = post("/api/ai/chat", {"messages": [{"role": "user", "content": "log half an avocado"}]})
-        check("coach: reply text and proposed rows, nothing written", status == 200 and res["reply"] == "You have room for it. Go ahead."
-              and res["rows"][0]["item"] == "avocado" and res["rows"][0]["basis"] == "estimate" and count() == before, res)
+        first = "log half an   avocado please, " + "and tell me more " * 6
+        status, res = post("/api/ai/chat", {"message": first})
+        chat = res.get("chat", {})
+        cid = chat.get("id")
+        msgs = chat.get("messages", [])
+        check("coach: a new chat is named after its first message", status == 200 and chat["title"].startswith("log half an avocado please")
+              and len(chat["title"]) <= 60 and chat["title"].endswith("…"), chat.get("title"))
+        check("coach: both messages saved with times, proposed rows kept, nothing logged", [m["role"] for m in msgs] == ["user", "assistant"]
+              and msgs[1]["content"] == "You have room for it. Go ahead." and msgs[1]["rows"][0]["item"] == "avocado"
+              and msgs[1]["rows"][0]["basis"] == "estimate" and all(m["at"].startswith("20") for m in msgs) and count() == before, msgs)
         system = fake["seen"][-1]["body"]["messages"][0]["content"]
         check("coach sees the log", "LOG DATA" in system and "net_carbs_goal_g" in system and "KNOWN FOODS" in system)
-        fake["reply"] = "Plain advice."
-        status, res = post("/api/ai/chat", {"messages": [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
-                                                         {"role": "user", "content": "c"}]})
-        check("coach: plain reply, thread passed on", status == 200 and res == {"reply": "Plain advice.", "rows": []}
-              and [m["role"] for m in fake["seen"][-1]["body"]["messages"]] == ["system", "user", "assistant", "user"], res)
-        first = fake["seen"][-1]["session"]
-        post("/api/ai/chat", {"messages": [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
-                                           {"role": "user", "content": "c"}, {"role": "assistant", "content": "d"},
-                                           {"role": "user", "content": "e"}]})
-        post("/api/ai/chat", {"messages": [{"role": "user", "content": "another chat"}]})
-        check("a session id is sent, the same through one chat and new for another", bool(first)
-              and fake["seen"][-2]["session"] == first and fake["seen"][-1]["session"] != first)
-        check("coach: last message must be the user's",
-              post("/api/ai/chat", {"messages": [{"role": "assistant", "content": "b"}]})[0] == 400
+        session = fake["seen"][-1]["session"]
+        fake["reply"] = "Plain advice in עברית."
+        status, res = post("/api/ai/chat", {"chat_id": cid, "message": "ועוד שאלה"})
+        check("coach: the saved thread is sent on, same session id", status == 200 and len(res["chat"]["messages"]) == 4
+              and res["chat"]["messages"][3] == dict(res["chat"]["messages"][3], content="Plain advice in עברית.", rows=[])
+              and [m["role"] for m in fake["seen"][-1]["body"]["messages"]] == ["system", "user", "assistant", "user"]
+              and fake["seen"][-1]["session"] == session and res["chat"]["title"] == chat["title"], res)
+        status, other = post("/api/ai/chat", {"message": "שיחה שנייה"})
+        check("coach: another chat gets its own session id and Hebrew title", other["chat"]["title"] == "שיחה שנייה"
+              and fake["seen"][-1]["session"] not in (None, session))
+        status, body = http(base, "GET", "/api/chats")
+        lst = json.loads(body)
+        check("chat list: latest first with message counts", status == 200 and [c["id"] for c in lst[:2]] == [other["chat"]["id"], cid]
+              and lst[1]["messages"] == 4 and lst[0]["title"] == "שיחה שנייה", lst)
+        status, body = http(base, "GET", f"/api/chats/{cid}")
+        check("a chat can be opened from any device", status == 200 and json.loads(body) == res["chat"])
+        fake["status"] = 500
+        status, res = post("/api/ai/chat", {"chat_id": cid, "message": "third"})
+        check("model failure: the message stays saved and comes back with the error", status == 502
+              and res["chat"]["messages"][-1]["content"] == "third" and len(res["chat"]["messages"]) == 5, res)
+        fake["status"] = 200
+        n = len(fake["seen"])
+        status, res = post("/api/ai/chat", {"chat_id": cid, "retry": True})
+        check("retry answers the saved message without repeating it", status == 200 and len(res["chat"]["messages"]) == 6
+              and fake["seen"][-1]["body"]["messages"][-1]["content"] == "third" and len(fake["seen"]) == n + 1, res)
+        check("coach: bad requests", post("/api/ai/chat", {"message": " "})[0] == 400
+              and post("/api/ai/chat", {"chat_id": cid, "retry": True})[0] == 400
+              and post("/api/ai/chat", {"chat_id": 99999, "message": "x"})[0] == 404
               and post("/api/ai/chat", {"messages": []})[0] == 400)
+        status, body = http(base, "DELETE", f"/api/chats/{other['chat']['id']}")
+        check("delete chat", status == 200 and http(base, "GET", f"/api/chats/{other['chat']['id']}")[0] == 404
+              and len(json.loads(http(base, "GET", "/api/chats")[1])) == 1, body)
 
         fake["reply"] = "Good period."
         n = len(fake["seen"])
@@ -595,17 +619,17 @@ def run_ai_checks(base):
 
         fake["no_effort"] = True
         n = len(fake["seen"])
-        status, res = post("/api/ai/chat", {"messages": [{"role": "user", "content": "hi"}]})
+        status, res = post("/api/ai/chat", {"message": "hi"})
         check("a model that refuses reasoning_effort is asked again without it", status == 200 and len(fake["seen"]) == n + 2
               and fake["seen"][-2]["body"].get("reasoning_effort") == "low" and "reasoning_effort" not in fake["seen"][-1]["body"], res)
         fake["no_effort"] = False
         fake["status"] = 429
-        status, res = post("/api/ai/chat", {"messages": [{"role": "user", "content": "hi"}]})
+        status, res = post("/api/ai/chat", {"message": "hi"})
         check("upstream error becomes 502 with a reason, no key", status == 502 and "rate limited" in res["error"]
               and key not in json.dumps(res), res)
         fake["status"] = 200
         os.environ["KETO_LLM_BASE_URL"] = "http://example.com/v1"
-        check("plain http to another host is refused", post("/api/ai/chat", {"messages": [{"role": "user", "content": "hi"}]})[0] == 503)
+        check("plain http to another host is refused", post("/api/ai/chat", {"message": "hi"})[0] == 503)
     finally:
         for k in ("KETO_LLM_API_KEY", "KETO_LLM_BASE_URL", "KETO_LLM_MODEL", "KETO_LLM_VISION_MODEL"):
             os.environ.pop(k, None)

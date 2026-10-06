@@ -100,7 +100,7 @@ const S = {
   ins: { range: loadRange(), data: null, err: "", seq: 0, review: null },
   ai: { enabled: false, model: null, vision: false },
   aiFood: null,                                           // set below (blankAiFood)
-  coach: { msgs: [], busy: false, err: "", draft: "", seq: 0 },
+  coach: { chat: null, list: [], busy: false, err: "", retry: false, draft: "", seq: 0 },
   day: null, week: null,
   top: [], foods: [], meals: [], sugg: [],
   fastTarget: loadTarget(),
@@ -120,7 +120,7 @@ const entryById = id => day().entries.find(x => x.id === id);
 /* ---------- API ---------- */
 function api(url, opts) {
   return fetch(url, opts).then(r => r.json().catch(() => ({})).then(body => {
-    if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+    if (!r.ok) throw Object.assign(new Error(body.error || `HTTP ${r.status}`), { body });
     return body;
   }));
 }
@@ -821,6 +821,7 @@ function setView(v) {
   if (hashView() !== S.view) history.replaceState(null, "", S.view === "day" ? location.pathname + location.search : "#" + S.view);
   if (S.view !== "day") S.ui.sheet = null;
   if (S.view === "insights") loadInsights(); else if (S.view === "day") load();
+  else if (S.coach.chat && S.coach.chat.id && !S.coach.busy) openChat(S.coach.chat.id); else loadChats();
   render();
   if (S.view === "coach") paintCoach(true); else window.scrollTo(0, 0);
 }
@@ -1050,7 +1051,7 @@ const blankAiFood = () => ({ text: "", busy: false, err: "", note: "", rows: nul
 function loadAi() {
   return api("/api/ai").then(a => {
     S.ai = a;
-    if (!a.enabled && S.view === "coach") setView("day"); else render();
+    if (!a.enabled && S.view === "coach") setView("day"); else { render(); if (S.view === "coach") loadChats(); }
   }).catch(() => {});
 }
 
@@ -1159,52 +1160,100 @@ function renderAiReview() {
     </form>`;
 }
 
-/* ---------- coach ---------- */
+/* ---------- coach ----------
+   Chats live on the server, so every device sees the same list. */
 const COACH_STARTERS = ["What can I still eat today?", "How was my week?", "Dinner ideas under 8 g net carbs", "Where do my carbs come from?"];
+// "14:05" today, otherwise "05/10 14:05".
+const stamp = iso => { const d = new Date(iso); return isNaN(d) ? "" : dmy(d) === today() ? hm(d) : `${dmy(d).slice(0, 5)} ${hm(d)}`; };
+
+function loadChats() {
+  const c = S.coach;
+  api("/api/chats").then(list => { c.list = list; if (S.view === "coach" && !c.chat && !c.busy) paintCoach(); }).catch(() => {});
+}
+function openChat(id) {
+  const c = S.coach, seq = ++c.seq;
+  c.err = "";
+  api(`/api/chats/${id}`).then(chat => {
+    if (seq !== c.seq) return;
+    c.chat = chat; c.busy = false;
+    if (S.view === "coach") paintCoach();
+  }).catch(e => { if (seq === c.seq) { c.chat = null; c.err = e.message; loadChats(); if (S.view === "coach") paintCoach(); } });
+}
+function closeChat() {
+  const c = S.coach;
+  c.seq++; c.chat = null; c.busy = false; c.err = ""; c.retry = false;
+  loadChats();
+  paintCoach(true);
+}
 
 function renderCoach() {
-  const c = S.coach;
-  const msgs = c.msgs.map((m, i) => `<div class="msg ${m.role === "user" ? "me" : "bot"}">
+  const c = S.coach, chat = c.chat;
+  const msgs = (chat ? chat.messages : []).map((m, i) => `<div class="msg ${m.role === "user" ? "me" : "bot"}">
       <p dir="auto">${esc(m.content)}</p>
       ${m.rows && m.rows.length ? `<ul class="msg-rows num">${m.rows.map(r => `<li><span class="it">${ut(r.item)}${r.quantity ? ` <small>${ut(r.quantity)}</small>` : ""}</span><span>${g(r.net_carbs_g)} g</span></li>`).join("")}</ul>
       <button type="button" class="btn btn-primary" data-act="coach-review" data-i="${i}">Review and add</button>` : ""}
+      <time class="msg-at num" datetime="${esc(m.at)}">${stamp(m.at)}</time>
     </div>`).join("");
-  const starters = !c.msgs.length ? `<div class="starters">${COACH_STARTERS.map((s, i) => `<button type="button" class="chip" data-act="coach-ask" data-i="${i}">${s}</button>`).join("")}</div>` : "";
+  const head = chat
+    ? `<header class="ins-h"><h1 class="chat-title">${ut(chat.title)}</h1><span class="chat-links"><button type="button" class="link" data-act="coach-close">Chats</button>${chat.id ? `<button type="button" class="link" data-act="coach-delete">Delete</button>` : ""}</span></header>`
+    : `<header class="ins-h"><h1>Coach</h1></header>
+       <p class="ins-sub">Sees your log from the last 14 days. Answers come from ${esc(S.ai.model || "the model")} and are not medical advice. Chats are saved and shared between your devices.</p>`;
+  const starters = chat ? "" : `<div class="starters">${COACH_STARTERS.map((s, i) => `<button type="button" class="chip" data-act="coach-ask" data-i="${i}">${s}</button>`).join("")}</div>`;
+  const list = chat || !c.list.length ? "" : `
+    <div class="sec-h"><h2>Latest chats</h2></div>
+    <ul class="chats">${c.list.map(x => `<li><button type="button" data-act="coach-open" data-id="${x.id}">
+      <span class="it">${ut(x.title)}</span>
+      <small class="num">${stamp(x.updated_at)} · ${x.messages} ${x.messages === 1 ? "message" : "messages"}</small></button></li>`).join("")}</ul>`;
   return `
-    <header class="ins-h"><h1>Coach</h1>${c.msgs.length ? `<button type="button" class="link" data-act="coach-clear">New chat</button>` : ""}</header>
-    <p class="ins-sub">Sees your log from the last 14 days. Answers come from ${esc(S.ai.model || "the model")} and are not medical advice.</p>
+    ${head}
     ${starters}
-    <div class="thread" id="thread" aria-live="polite">${msgs}${c.busy ? `<div class="msg bot wait"><p>Thinking…</p></div>` : ""}</div>
-    ${c.err ? `<p class="error" role="alert">${esc(c.err)} <button type="button" class="link" data-act="coach-retry">Try again</button></p>` : ""}
+    ${chat ? `<div class="thread" id="thread" aria-live="polite">${msgs}${c.busy ? `<div class="msg bot wait"><p>Thinking…</p></div>` : ""}</div>` : ""}
+    ${c.err ? `<p class="error" role="alert">${esc(c.err)}${c.retry ? ` <button type="button" class="link" data-act="coach-retry">Try again</button>` : ""}</p>` : ""}
+    ${list}
     <form class="coach-bar" data-form="coach" novalidate><div class="pinbar-in">
-      <textarea name="q" dir="auto" rows="1" enterkeyhint="send" aria-label="Message" placeholder="Ask, or say what to log">${esc(c.draft)}</textarea>
+      <textarea name="q" dir="auto" rows="1" enterkeyhint="send" aria-label="Message" placeholder="${chat ? "Ask, or say what to log" : "Start a new chat"}">${esc(c.draft)}</textarea>
       <button class="btn btn-primary"${c.busy ? " disabled" : ""}>Send</button></div></form>`;
 }
 
 function paintCoach(focus) {
   paint("coach", renderCoach());
-  window.scrollTo(0, document.documentElement.scrollHeight);
+  if (S.coach.chat) window.scrollTo(0, document.documentElement.scrollHeight); else window.scrollTo(0, 0);
   if (focus) { const t = document.querySelector("#coach [name=q]"); if (t) t.focus(); }
 }
 
+// text: a new message; null: ask again for an answer to the last saved message.
 function coachSend(text) {
   const c = S.coach;
   if (c.busy) return;
-  if (text != null) {
+  let body;
+  if (text == null) body = { chat_id: c.chat.id, retry: true };
+  else {
     text = text.trim();
     if (!text) return;
-    c.msgs.push({ role: "user", content: text });
+    body = { chat_id: c.chat ? c.chat.id : null, message: text };
+    // Shown at once; the saved chat replaces it when the answer arrives.
+    if (!c.chat) c.chat = { id: null, title: text, messages: [] };
+    c.chat.messages.push({ role: "user", content: text, rows: [], at: new Date().toISOString(), unsent: true });
     c.draft = "";
   }
-  c.busy = true; c.err = "";
+  c.busy = true; c.err = ""; c.retry = false;
   paintCoach();
   const seq = ++c.seq;
-  send("POST", "/api/ai/chat", { messages: c.msgs.map(m => ({ role: m.role, content: m.content })) }).then(res => {
+  send("POST", "/api/ai/chat", body).then(res => {
     if (seq !== c.seq) return;
-    c.busy = false;
-    c.msgs.push({ role: "assistant", content: res.reply, rows: res.rows });
+    c.busy = false; c.chat = res.chat;
     if (S.view === "coach") paintCoach();
-  }).catch(e => { if (seq === c.seq) { c.busy = false; c.err = e.message; if (S.view === "coach") paintCoach(); } });
+  }).catch(e => {
+    if (seq !== c.seq) return;
+    c.busy = false; c.err = e.message;
+    if (e.body && e.body.chat) { c.chat = e.body.chat; c.retry = true; }      // the message is saved; only the answer failed
+    else if (text != null) {                                                 // nothing was saved: hand the text back
+      c.chat.messages = c.chat.messages.filter(m => !m.unsent);
+      if (!c.chat.id) c.chat = null;
+      c.draft = text;
+    }
+    if (S.view === "coach") paintCoach();
+  });
 }
 
 /* ---------- written review on Insights ---------- */
@@ -1469,8 +1518,15 @@ document.addEventListener("click", ev => {
       break;
     case "coach-ask": coachSend(COACH_STARTERS[+el.dataset.i]); return;
     case "coach-retry": coachSend(null); return;
-    case "coach-clear": S.coach = { msgs: [], busy: false, err: "", draft: "", seq: S.coach.seq + 1 }; paintCoach(true); return;
-    case "coach-review": { const m = S.coach.msgs[+el.dataset.i]; if (m && m.rows) { S.aiFood = blankAiFood(); openReview(m.rows, "coach"); } return; }
+    case "coach-close": closeChat(); return;
+    case "coach-open": openChat(id); return;
+    case "coach-delete": {
+      const chat = S.coach.chat;
+      if (!chat || !chat.id || !window.confirm("Delete this chat on all devices?")) return;
+      api(`/api/chats/${chat.id}`, { method: "DELETE" }).then(closeChat).catch(fail);
+      return;
+    }
+    case "coach-review": { const m = S.coach.chat && S.coach.chat.messages[+el.dataset.i]; if (m && m.rows.length) { S.aiFood = blankAiFood(); openReview(m.rows, "coach"); } return; }
     case "ins-review": insReview(); return;
     case "ins-range":
       S.ins.range = el.dataset.range; saveRange(S.ins.range);
