@@ -72,6 +72,10 @@ const EMPTY_DAY = { date: "", count: 0, totals: { net_carbs_g: 0, calories: null
 function loadTarget() {
   try { const v = localStorage.getItem("keto.fastTarget"); return v === null ? 16 : +v || 0; } catch (e) { return 16; }
 }
+function loadRange() {
+  try { const v = localStorage.getItem("keto.insightsRange"); return ["7", "30", "90", "all"].includes(v) ? v : "30"; } catch (e) { return "30"; }
+}
+function saveRange(v) { try { localStorage.setItem("keto.insightsRange", v); } catch (e) { /* private mode */ } }
 function saveTarget(v) { try { localStorage.setItem("keto.fastTarget", String(v)); } catch (e) { /* private mode */ } }
 
 /* Glucose is stored in mmol/L; mg/dL is a display choice remembered per browser. */
@@ -90,6 +94,8 @@ function blankForm(keep) {
 
 const S = {
   date: today(),
+  view: location.hash === "#insights" ? "insights" : "day",
+  ins: { range: loadRange(), data: null, err: "", seq: 0 },
   day: null, week: null,
   top: [], foods: [], meals: [], sugg: [],
   fastTarget: loadTarget(),
@@ -166,6 +172,9 @@ function paint(id, html) { document.getElementById(id).innerHTML = html; }
 
 function render() {
   const d = day();
+  document.body.dataset.view = S.view;
+  paint("tabs", renderTabs());
+  paint("insights", S.view === "insights" ? renderInsights() : "");
   paint("nav", renderNav());
   document.getElementById("glance").className = "glance " + (d.over_goal ? "is-over" : "is-under");
   paint("glance", renderGlance(d));
@@ -708,6 +717,243 @@ function renderToast() {
 }
 
 /* =========================================================================
+   Insights — progress over a range of days, from /api/insights.
+   ========================================================================= */
+const RANGES = [["7", "7 d"], ["30", "30 d"], ["90", "90 d"], ["all", "All"]];
+const CH = {};   // chart name -> { n, line, idx, tip(i), rest } for the scrub readout
+const dm = s => s.slice(0, 5);
+const thousands = n => Math.round(n).toLocaleString("en-GB");
+const signed = (v, f = g) => `${v > 0 ? "+" : v < 0 ? "−" : "±"}${f(Math.abs(v))}`;
+const dayTag = d => `${weekday(d.date, "short")} ${dm(d.date)}`;
+// The next round number at or above x: 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8 or 10 times a power of ten.
+function nice(x) {
+  if (!(x > 0)) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(x))), m = x / p;
+  return [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find(s => s >= m - 1e-9) * p;
+}
+
+function loadInsights() {
+  const I = S.ins, seq = ++I.seq;
+  return api(`/api/insights?days=${q(I.range)}`).then(r => {
+    if (seq !== I.seq) return;
+    I.data = r; I.err = ""; S.first = r.first_date;
+    paint("insights", renderInsights());
+  }).catch(e => { if (seq === I.seq) { I.err = e.message; paint("insights", renderInsights()); } });
+}
+
+function setView(v) {
+  S.view = v === "insights" ? "insights" : "day";
+  if ((location.hash === "#insights") !== (S.view === "insights")) {
+    history.replaceState(null, "", S.view === "insights" ? "#insights" : location.pathname + location.search);
+  }
+  if (S.view === "insights") { S.ui.sheet = null; loadInsights(); } else load();
+  render();
+  window.scrollTo(0, 0);
+}
+
+function renderTabs() {
+  return [["day", "Day"], ["insights", "Insights"]].map(([v, label]) =>
+    `<button type="button" role="tab" aria-selected="${S.view === v}" data-act="view" data-view="${v}">${label}</button>`).join("");
+}
+
+function chartFrame(name, inner, hi, lo, days, label) {
+  const a = days[0], z = days[days.length - 1], mid = days[Math.floor((days.length - 1) / 2)];
+  const x = days.length > 6 ? [a, mid, z] : days.length > 1 ? [a, z] : [a];
+  return `<div class="chart" role="img" aria-label="${esc(label)}">
+    <span class="yax num" aria-hidden="true"><span>${hi}</span><span>${lo}</span></span>
+    <div class="plotarea" data-chart="${name}">${inner}<i class="cursor" hidden></i></div>
+    <span class="xax num" aria-hidden="true">${x.map(d => `<span>${dm(d.date)}</span>`).join("")}</span></div>`;
+}
+
+// One bar per day. o: val(d), tip(d, v), rest, unit, label, cls(d, v), line(d), tone.
+function barChart(name, days, o) {
+  const vals = days.map(o.val);
+  const lines = o.line ? days.map(o.line) : [];
+  const top = nice(Math.max(0, ...vals.map(v => v ?? 0), ...lines.map(v => v ?? 0)));
+  CH[name] = { n: days.length, tip: i => `${dayTag(days[i])} · ${vals[i] == null ? "nothing logged" : o.tip(days[i], vals[i])}`, rest: o.rest };
+  const cols = days.map((d, i) => {
+    const v = vals[i], ln = lines[i];
+    return `<span class="col${v == null ? " none" : ""}${o.cls ? " " + o.cls(d, v) : ""}"><i style="height:${v == null ? 0 : Math.max(v / top * 100, 1.5)}%"></i>${ln != null ? `<b style="bottom:${ln / top * 100}%"></b>` : ""}</span>`;
+  }).join("");
+  const dense = days.length > 45 ? " dense" : days.length > 14 ? " mid" : "";
+  return chartFrame(name, `<div class="bars ${o.tone || ""}${dense}">${cols}</div>`, `${g(top)}${o.unit ? " " + o.unit : ""}`, "0", days, o.label);
+}
+
+// One or two lines over the days that have a reading. series: [{ val(d), cls }]; o: tip(d), rest, fmt, label.
+function lineChart(name, days, series, o) {
+  const n = days.length, fmt = o.fmt || g;
+  const all = [];
+  const pts = series.map(s => days.map((d, i) => [i, s.val(d)]).filter(p => p[1] != null));
+  pts.forEach(ps => ps.forEach(p => all.push(p[1])));
+  const min = Math.min(...all), max = Math.max(...all);
+  const step = nice((max - min) / 2 || Math.abs(max) * .02 || 1);
+  let lo = Math.floor(min / step + 1e-9) * step, hi = Math.ceil(max / step - 1e-9) * step;
+  if (hi === lo) { hi += step; lo -= step; }
+  const X = i => n > 1 ? i / (n - 1) * 100 : 50, Y = v => (hi - v) / (hi - lo) * 100;
+  const idx = [...new Set(pts.flat().map(p => p[0]))].sort((a, b) => a - b);
+  CH[name] = { n, line: true, idx, tip: i => `${dayTag(days[i])} · ${o.tip(days[i])}`, rest: o.rest };
+  const svg = pts.map((ps, k) => `<polyline class="${series[k].cls || ""}" points="${ps.map(p => `${X(p[0]).toFixed(2)},${Y(p[1]).toFixed(2)}`).join(" ")}"/>`).join("");
+  const dots = pts.map((ps, k) => ps.length > 31 ? "" : ps.map(p => `<i class="dot ${series[k].cls || ""}" style="left:${X(p[0]).toFixed(2)}%;top:${Y(p[1]).toFixed(2)}%"></i>`).join("")).join("");
+  return chartFrame(name, `<svg class="lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${svg}</svg>${dots}`, fmt(hi), fmt(lo), days, o.label);
+}
+
+const insSection = (name, title, rest, body) => `
+  <section class="ins-sec" data-ins="${name}">
+    <div class="sec-h"><h2>${title}</h2><p class="readout num" id="ro-${name}">${rest || ""}</p></div>
+    ${body}
+  </section>`;
+const statTile = (label, value, sub, cls) => `<div class="stat${cls ? " " + cls : ""}"><p class="eyebrow">${label}</p><p class="stat-v num">${value}</p><p class="stat-s num">${sub || "&nbsp;"}</p></div>`;
+
+function renderInsights() {
+  const I = S.ins, r = I.data;
+  const head = `
+    <header class="ins-h">
+      <h1>Insights</h1>
+      <div class="seg" role="group" aria-label="Range">${RANGES.map(([v, label]) =>
+        `<button type="button" class="btn" data-act="ins-range" data-range="${v}" aria-pressed="${I.range === v}">${label}</button>`).join("")}</div>
+    </header>`;
+  if (!r) return head + `<p class="empty">${I.err ? esc(I.err) : "Loading…"}</p>`;
+  const s = r.summary, days = r.days, av = s.average, n = s.logged_days;
+  const span = days.length;
+  const sub = `<p class="ins-sub num">${dm(r.from)} – ${dm(r.to)} · ${span} ${span === 1 ? "day" : "days"}${n ? ` · averages over ${n} full ${n === 1 ? "day" : "days"}, today left out` : ""}</p>`;
+  if (!days.some(d => d.count) && !Object.values(s.measurements).some(Boolean)) {
+    return head + sub + `<p class="empty">Nothing logged in this range yet.</p>`;
+  }
+  return head + sub + (I.err ? `<p class="error">${esc(I.err)}</p>` : "")
+    + renderInsStats(r) + renderInsCarbs(r) + renderInsEnergy(r) + renderInsFasting(r) + renderInsBody(r) + renderInsFoods(r);
+}
+
+function renderInsStats(r) {
+  const s = r.summary, av = s.average, n = s.logged_days, w = s.measurements.weight_kg, f = s.fasting;
+  const lastGoal = r.days[r.days.length - 1].goal;
+  const pct = n ? Math.round(s.within_goal_days / n * 100) : 0;
+  return `<div class="stats">
+    ${statTile("Avg net carbs", n ? `${g(av.net_carbs_g)} g` : "–", `goal ${g(lastGoal)} g`, n && av.net_carbs_g > lastGoal ? "over" : "good")}
+    ${statTile("Within goal", n ? `${pct}%` : "–", n ? `${s.within_goal_days} of ${n} days` : "", n && pct < 50 ? "over" : "good")}
+    ${statTile("Streak", `${s.streak.current} ${s.streak.current === 1 ? "day" : "days"}`, `best ${s.streak.best}`)}
+    ${statTile("Avg energy", av.calories == null ? "–" : `${thousands(av.calories)}`, "kcal a day")}
+    ${statTile("Avg fast", f.average_hours == null ? "–" : `${g(f.average_hours)} h`, f.days ? `longest ${g(f.longest_hours)} h` : "none recorded", "fasting")}
+    ${statTile("Weight", w && w.days > 1 ? `${signed(w.change)} kg` : w ? `${g(w.last)} kg` : "–",
+      w && w.days > 1 ? `${g(w.first)} → ${g(w.last)} kg` : w ? `one reading, ${dm(w.last_date)}` : "no readings", "body")}
+  </div>`;
+}
+
+function renderInsCarbs(r) {
+  const s = r.summary, n = s.logged_days;
+  const rest = n ? `avg ${g(s.average.net_carbs_g)} g · ${s.within_goal_days} of ${n} within goal` : "";
+  return insSection("carbs", "Net carbs per day", rest, barChart("carbs", r.days, {
+    val: d => d.net_carbs_g, line: d => d.goal, unit: "g", rest,
+    cls: d => d.over_goal ? "over" : "",
+    tip: (d, v) => `${g(v)} of ${g(d.goal)} g${d.over_goal ? ", over" : ""}`,
+    label: `Net carbs per day, ${dm(r.from)} to ${dm(r.to)}. ${rest}`,
+  }) + `<p class="legend"><span class="key line"></span>goal</p>`);
+}
+
+function renderInsEnergy(r) {
+  const s = r.summary, av = s.average, m = s.macro_pct;
+  if (!r.days.some(d => d.calories != null)) return "";
+  const rest = av.calories == null ? "" : `avg ${thousands(av.calories)} kcal`;
+  const split = m ? `
+    <div class="split" role="img" aria-label="Energy: fat ${m.fat}%, protein ${m.protein}%, net carbs ${m.net_carbs}%">
+      <i class="fat" style="width:${m.fat}%"></i><i class="pro" style="width:${m.protein}%"></i><i class="carb" style="width:${m.net_carbs}%"></i></div>
+    <p class="legend num"><span><span class="key fat"></span>fat ${m.fat}% · ${Math.round(av.fat_g)} g</span><span><span class="key pro"></span>protein ${m.protein}% · ${Math.round(av.protein_g)} g</span><span><span class="key carb"></span>net carbs ${m.net_carbs}% · ${g(av.net_carbs_g)} g</span></p>` : "";
+  return insSection("energy", "Energy and macros", rest, barChart("energy", r.days, {
+    val: d => d.calories, unit: "kcal", rest, tone: "ink",
+    tip: (d, v) => `${thousands(v)} kcal${d.fat_g != null ? ` · fat ${Math.round(d.fat_g)} g` : ""}${d.protein_g != null ? ` · protein ${Math.round(d.protein_g)} g` : ""}`,
+    label: `Energy per day, ${dm(r.from)} to ${dm(r.to)}. ${rest}`,
+  }) + split);
+}
+
+function renderInsFasting(r) {
+  const f = r.summary.fasting, e = r.summary.eating, target = S.fastTarget;
+  if (!f.days) return insSection("fasting", "Fasting", "", `<p class="empty">No fasts in this range.</p>`);
+  const hit = target ? r.days.filter(d => d.fast_hours >= target).length : 0;
+  const rest = `avg ${g(f.average_hours)} h${target ? ` · ${hit} of ${f.days} reached ${target} h` : ""}`;
+  const eating = e.days ? `<p class="num">Eating window averages ${dur(e.average_window_hours)}, from about ${e.average_first_time} to ${e.average_last_time}.</p>` : "";
+  return insSection("fasting", "Fasting hours per day", rest, barChart("fasting", r.days, {
+    val: d => d.fast_hours, line: target ? () => target : null, unit: "h", rest, tone: "sky",
+    tip: (d, v) => `${dur(v)} fasted`,
+    label: `Fasting hours per day, ${dm(r.from)} to ${dm(r.to)}. ${rest}, longest ${g(f.longest_hours)} h`,
+  }) + (target ? `<p class="legend"><span class="key line"></span>${target} h target</p>` : "") + eating);
+}
+
+function renderInsBody(r) {
+  const st = r.summary.measurements, days = r.days, mg = S.gluUnit === "mgdl";
+  const glu = v => +gluShow(v);
+  const one = (name, title, stat, unit, val, fmt, cls) => {
+    if (!stat) return "";
+    const show = fmt || g, u = unit ? " " + unit : "";
+    const rest = stat.days > 1 ? `${show(stat.first)} → ${show(stat.last)}${u} · avg ${show(stat.average)}` : `${show(stat.last)}${u} on ${dm(stat.last_date)}`;
+    const body = stat.days > 1 ? lineChart(name, days, [{ val, cls }], {
+      rest, fmt: v => tidy(v), tip: d => `${show(val(d))}${u}`,
+      label: `${title}, ${dm(r.from)} to ${dm(r.to)}: ${rest}`,
+    }) : "";
+    return insSection(name, title, rest, body);
+  };
+  let bp = "";
+  if (st.bp_sys) {
+    const a = st.bp_sys, b = st.bp_dia;
+    const rest = `avg ${Math.round(a.average)}/${Math.round(b.average)} · latest ${g(a.last)}/${g(b.last)}`;
+    bp = insSection("bp", "Blood pressure, mmHg", rest, a.days > 1 ? lineChart("bp", days, [{ val: d => d.bp_sys }, { val: d => d.bp_dia, cls: "soft" }], {
+      rest, tip: d => `${g(d.bp_sys)}/${g(d.bp_dia)}${d.pulse != null ? ` · pulse ${g(d.pulse)}` : ""}`,
+      label: `Blood pressure, ${dm(r.from)} to ${dm(r.to)}: ${rest}`,
+    }) : "");
+  }
+  const out = one("weight", "Weight", st.weight_kg, "kg", d => d.weight_kg)
+    + one("ketones", "Ketones, mmol/L", st.ketones_mmol, "", d => d.ketones_mmol)
+    + one("glucose", `Glucose, ${gluUnitLabel(S.gluUnit)}`, st.glucose_mmol && mg
+        ? Object.assign({}, st.glucose_mmol, { first: glu(st.glucose_mmol.first), last: glu(st.glucose_mmol.last), average: glu(st.glucose_mmol.average) })
+        : st.glucose_mmol, "", d => d.glucose_mmol == null ? null : mg ? glu(d.glucose_mmol) : d.glucose_mmol)
+    + one("gki", "GKI (glucose ÷ ketones)", st.gki, "", d => d.gki)
+    + bp
+    + one("pulse", "Pulse, bpm", st.pulse, "", d => d.pulse);
+  return out || insSection("body", "Body", "", `<p class="empty">No measurements in this range. Add them from the Day tab.</p>`);
+}
+
+function renderInsFoods(r) {
+  if (!r.foods.length || !(r.total_net_carbs_g > 0)) return "";
+  const top = r.foods[0].net_carbs_g || 1;
+  const rows = r.foods.filter(x => x.net_carbs_g > 0).map(x => `<li>
+      <span class="it">${ut(x.item)}</span>
+      <span class="num">${g(x.net_carbs_g)} g · ${x.share_pct}%</span>
+      <span class="meter thin" aria-hidden="true"><i style="width:${x.net_carbs_g / top * 100}%"></i></span>
+      <small class="num">logged ${x.times}×${x.calories != null ? ` · ${thousands(x.calories)} kcal` : ""}</small></li>`).join("");
+  return insSection("foods", "Where the carbs come from", `${g(r.total_net_carbs_g)} g in total`, `<ol class="tops">${rows}</ol>`);
+}
+
+/* Scrub a chart: the header readout shows the day under the finger or pointer. */
+function scrub(ev) {
+  const plot = ev.target.closest ? ev.target.closest(".plotarea") : null;
+  if (!plot) return;
+  const c = CH[plot.dataset.chart], box = plot.getBoundingClientRect();
+  if (!c || !box.width) return;
+  const x = Math.min(Math.max((ev.clientX - box.left) / box.width, 0), 1);
+  let i, at;
+  if (c.line) {
+    const want = x * (c.n - 1);
+    i = c.idx.reduce((a, b) => Math.abs(b - want) < Math.abs(a - want) ? b : a, c.idx[0]);
+    at = c.n > 1 ? i / (c.n - 1) * 100 : 50;
+  } else {
+    i = Math.min(c.n - 1, Math.floor(x * c.n));
+    at = (i + .5) / c.n * 100;
+  }
+  const cur = plot.querySelector(".cursor");
+  cur.hidden = false; cur.style.left = at + "%";
+  const ro = document.getElementById("ro-" + plot.dataset.chart);
+  if (ro) { ro.textContent = c.tip(i); ro.classList.add("on"); }
+}
+function scrubEnd(ev) {
+  const plot = ev.target.closest ? ev.target.closest(".plotarea") : null;
+  if (!plot || (ev.relatedTarget && plot.contains(ev.relatedTarget))) return;
+  const c = CH[plot.dataset.chart], ro = document.getElementById("ro-" + plot.dataset.chart);
+  plot.querySelector(".cursor").hidden = true;
+  if (c && ro) { ro.textContent = c.rest || ""; ro.classList.remove("on"); }
+}
+document.addEventListener("pointerdown", scrub);
+document.addEventListener("pointermove", scrub);
+document.addEventListener("pointerout", ev => { if (ev.pointerType === "mouse") scrubEnd(ev); });
+
+/* =========================================================================
    Actions
    ========================================================================= */
 let toastTimer;
@@ -927,6 +1173,12 @@ document.addEventListener("click", ev => {
   if (!el) return;
   const act = el.dataset.act, id = +el.dataset.id, d = day();
   switch (act) {
+    case "view": if (el.dataset.view !== S.view) setView(el.dataset.view); return;
+    case "ins-range":
+      S.ins.range = el.dataset.range; saveRange(S.ins.range);
+      paint("insights", renderInsights());
+      loadInsights();
+      return;
     case "day": goTo(addDays(S.date, +el.dataset.n)); return;
     case "today": goTo(today()); return;
     case "goto": goTo(el.dataset.date); return;
@@ -1188,7 +1440,15 @@ setInterval(() => {
   if (day().active_fast && !S.ui.goalEdit && !S.ui.fastAdjust) paint("glance", renderGlance(day()));
 }, TICK_MS);
 
+window.addEventListener("hashchange", () => {
+  const v = location.hash === "#insights" ? "insights" : "day";
+  if (v !== S.view) setView(v);
+});
+// iOS Safari ignores user-scalable=no; cancel its pinch gesture as well.
+for (const t of ["gesturestart", "gesturechange"]) document.addEventListener(t, ev => ev.preventDefault(), { passive: false });
+
 render();
 loadLists();
 load();
+if (S.view === "insights") loadInsights();
 })();

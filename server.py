@@ -103,6 +103,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, db.recent_foods() if top is None else db.frequent_foods(top))
         elif url.path == "/api/days":
             self._json(200, db.days_overview(qs.get("end", [None])[0], qs.get("n", [None])[0]))
+        elif url.path == "/api/insights":
+            self._json(200, db.insights(qs.get("days", [None])[0]))
         elif url.path == "/api/export.csv":
             table = qs.get("table", ["entries"])[0]
             body = ("\ufeff" + db.export_csv(table)).encode("utf-8")  # BOM so Excel reads Hebrew

@@ -362,3 +362,79 @@ button { cursor: pointer; }
 .seg .btn:first-child { border-radius: var(--r-2) 0 0 var(--r-2); }
 .seg .btn:last-child { border-radius: 0 var(--r-2) var(--r-2) 0; margin-left: -1px; }
 .seg .btn[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+
+/* ---------- no pinch or double-tap zoom ---------- */
+html { touch-action: pan-x pan-y; }
+
+/* ---------- tabs: Day | Insights ---------- */
+.tabs { display: flex; gap: var(--s-5); margin: 0 calc(-1 * var(--s-4)); padding: 0 var(--s-4); border-bottom: 1px solid var(--line); }
+.tabs button { position: relative; min-height: var(--tap); padding: 0; border: 0; background: none; font-size: var(--t-sm); font-weight: 600; letter-spacing: .02em; color: var(--muted-ink); }
+.tabs button[aria-selected="true"] { color: var(--ink); }
+.tabs button[aria-selected="true"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--accent); }
+body[data-view="insights"] :is(#nav, #glance, #quick, #log, #more, .foot, #pinbar) { display: none; }
+body:not([data-view="insights"]) #insights { display: none; }
+
+/* ---------- insights ---------- */
+.ins-h { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); margin-top: var(--s-4); }
+.ins-h h1 { margin: 0; font: var(--t-xl)/1.1 var(--font-serif); font-weight: 400; }
+.seg .btn:not(:first-child):not(:last-child) { border-radius: 0; margin-left: -1px; }
+.ins-sub { margin: var(--s-1) 0 0; font-size: var(--t-xs); color: var(--muted-ink); }
+.stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-2); margin-top: var(--s-4); }
+@media (min-width: 30rem) { .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.stat { padding: var(--s-3); border-radius: var(--r-2); background: var(--hl); }
+.stat p { margin: 0; }
+.stat .eyebrow { color: var(--muted-ink); }
+.stat-v { margin-top: var(--s-1) !important; font: 28px/1.1 var(--font-serif); white-space: nowrap; }
+.stat-s { font-size: var(--t-xs); color: var(--muted-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat.good { background: var(--under-tint); }
+.stat.good .stat-v { color: var(--accent); }
+.stat.over { background: var(--over-tint); }
+.stat.over .stat-v { color: var(--over); }
+.stat.fasting { background: var(--fast-tint); }
+.stat.fasting .stat-v { color: var(--fast); }
+.stat.body { background: var(--body-tint); }
+.stat.body .stat-v { color: var(--body); }
+
+.ins-sec .sec-h { align-items: baseline; flex-wrap: wrap; row-gap: 2px; }
+.ins-sec > p { margin: var(--s-2) 0 0; font-size: var(--t-sm); }
+.readout { margin: 0; font-size: var(--t-xs); color: var(--muted-ink); text-align: right; }
+.readout.on { color: var(--ink); font-weight: 600; }
+.chart { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--s-1) var(--s-2); }
+.yax { display: flex; flex-direction: column; justify-content: space-between; min-width: 1.6rem; text-align: right; font-size: var(--t-2xs); line-height: 1; color: var(--muted-ink); }
+.xax { grid-column: 2; display: flex; justify-content: space-between; font-size: var(--t-2xs); color: var(--muted-ink); }
+.xax span:only-child { margin: 0 auto; }
+.plotarea { position: relative; height: 120px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--edge); touch-action: pan-y; cursor: crosshair; }
+.cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--ink); opacity: .55; pointer-events: none; }
+.bars { display: flex; align-items: stretch; height: 100%; }
+.col { position: relative; flex: 1; min-width: 0; padding: 0 2px; }
+.bars.mid .col { padding: 0 1px; }
+.bars.dense .col { padding: 0 .5px; }
+.col i { position: absolute; left: 2px; right: 2px; bottom: 0; border-radius: 4px 4px 0 0; background: var(--accent-hi); }
+.bars.mid .col i { left: 1px; right: 1px; border-radius: 2px 2px 0 0; }
+.bars.dense .col i { left: .5px; right: .5px; border-radius: 0; }
+.col.over i { background: var(--over); }
+.col.none i { height: 2px !important; background: var(--empty); }
+.bars.sky .col:not(.none) i { background: var(--fast-bar); }
+.bars.ink .col:not(.none) i { background: var(--muted); }
+.col b { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--ink); opacity: .6; }
+.lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.lines polyline { fill: none; stroke: var(--body); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.lines polyline.soft { stroke-dasharray: 4 3; }
+.dot { position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: var(--body); box-shadow: 0 0 0 2px var(--bg); }
+.dot.soft { background: var(--bg); box-shadow: inset 0 0 0 2px var(--body); }
+.legend { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-3); color: var(--muted-ink); font-size: var(--t-xs) !important; }
+.legend > span { white-space: nowrap; }
+.key { display: inline-block; width: 10px; height: 10px; margin-right: var(--s-1); border-radius: 2px; vertical-align: -1px; }
+.key.line { width: 16px; height: 0; border-top: 1px dashed var(--ink); border-radius: 0; vertical-align: 3px; }
+.key.fat, .split .fat { background: var(--accent-hi); }
+.key.pro, .split .pro { background: var(--fast-bar); }
+.key.carb, .split .carb { background: var(--body); }
+.split { display: flex; gap: 2px; height: 14px; margin-top: var(--s-4); border-radius: 4px; overflow: hidden; }
+.split i { min-width: 3px; }
+.tops { list-style: none; margin: 0; padding: 0; font-size: var(--t-sm); }
+.tops li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--s-3); padding: var(--s-2) 0; border-bottom: 1px solid var(--line); }
+.tops .it { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.tops .meter, .tops small { grid-column: 1 / -1; }
+.tops .meter { background: var(--hl); }
+.tops small { color: var(--muted-ink); font-size: var(--t-xs); }
+#insights { padding-bottom: var(--s-5); }

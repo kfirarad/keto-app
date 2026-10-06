@@ -1182,6 +1182,172 @@ def import_sheet(text, dry_run=False):
     return result
 
 
+# ---- insights ------------------------------------------------------------
+
+INSIGHTS_MAX_DAYS = 3660
+TOP_FOODS = 8
+_EATEN = "(ifnull(calories, 0) > 0 OR net_carbs_g > 0)"    # not coffee or water
+
+
+def _insight_days(value):
+    """None, "" or "all" -> None (everything tracked); else a positive day count."""
+    if value is None or (isinstance(value, str) and value.strip().lower() in ("", "all")):
+        return None
+    bad = ValidationError(f'days must be a positive integer or "all", got {value!r}')
+    if isinstance(value, bool):
+        raise bad
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise bad
+    if n < 1 or (isinstance(value, float) and value != n):
+        raise bad
+    return min(n, INSIGHTS_MAX_DAYS)
+
+
+def _avg(vals):
+    return _round(sum(vals) / len(vals)) if vals else None
+
+
+def _avg_time(times):
+    if not times:
+        return None
+    m = round(sum(int(t[:2]) * 60 + int(t[3:5]) for t in times) / len(times))
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def _series_stats(days, field):
+    """First, last, lowest, highest and average of a per-day value."""
+    pts = [(d["date"], d[field]) for d in days if d[field] is not None]
+    if not pts:
+        return None
+    vals = [v for _, v in pts]
+    return {"days": len(pts), "first": vals[0], "first_date": pts[0][0], "last": vals[-1],
+            "last_date": pts[-1][0], "min": min(vals), "max": max(vals), "average": _avg(vals),
+            "change": _round(vals[-1] - vals[0])}
+
+
+def insights(days=None):
+    """Progress over the last `days` calendar days ending today (default: since
+    the first tracked day): one row per day, a summary, and the foods that
+    brought the most net carbs.
+
+    Averages, days within goal and the macro split count logged days before
+    today, since today is still in progress. A day's fast_hours are the fasts
+    that ended that day, or the fasting hours written on its entries when no
+    fast was recorded.
+    """
+    n = _insight_days(days)
+    conn = connect()
+    try:
+        today = today_iso()
+        first = _first_iso(conn)
+        end_day = date.fromisoformat(today)
+        start = first if n is None else max(first, (end_day - timedelta(days=n - 1)).isoformat())
+        span = (end_day - date.fromisoformat(start)).days
+        isos = [(end_day - timedelta(days=i)).isoformat() for i in range(span, -1, -1)]
+        rng = (start, today)
+
+        food = {r["entry_date"]: r for r in conn.execute(
+            "SELECT entry_date, COUNT(*) AS count, SUM(net_carbs_g) AS net, SUM(calories) AS calories,"
+            " SUM(fat_g) AS fat, SUM(protein_g) AS protein, SUM(fasting_hours) AS fasting,"
+            f" MIN(CASE WHEN {_EATEN} THEN entry_time END) AS first_time,"
+            f" MAX(CASE WHEN {_EATEN} THEN entry_time END) AS last_time"
+            " FROM entries WHERE entry_date BETWEEN ? AND ? GROUP BY entry_date", rng)}
+        goals = conn.execute(
+            "SELECT goal_date, net_carbs_goal FROM day_goals ORDER BY goal_date").fetchall()
+        fasted = {}
+        for r in conn.execute("SELECT * FROM fasts WHERE end_date BETWEEN ? AND ?", rng):
+            h = _hours_between(_moment(r["start_date"], r["start_time"]),
+                               _moment(r["end_date"], r["end_time"]))
+            fasted[r["end_date"]] = fasted.get(r["end_date"], 0.0) + h
+        measured = {}
+        for r in conn.execute(
+                f"SELECT * FROM measurements WHERE m_date BETWEEN ? AND ? {_M_ORDER}", rng):
+            vals = measured.setdefault(r["m_date"], {})
+            for f in MEASURE_FIELDS:
+                if r[f] is not None:
+                    vals[f] = _clean_num(r[f])
+        water = dict(conn.execute(
+            "SELECT log_date, water_ml FROM body_log WHERE log_date BETWEEN ? AND ?", rng).fetchall())
+        tops = conn.execute(
+            "SELECT item, COUNT(*) AS times, SUM(net_carbs_g) AS net, SUM(calories) AS calories"
+            " FROM entries WHERE entry_date BETWEEN ? AND ? GROUP BY item"
+            " ORDER BY net DESC, times DESC, item LIMIT ?", rng + (TOP_FOODS,)).fetchall()
+        total_net = conn.execute(
+            "SELECT SUM(net_carbs_g) FROM entries WHERE entry_date BETWEEN ? AND ?", rng).fetchone()[0]
+    finally:
+        conn.close()
+
+    out, gi, goal = [], 0, GOAL_NET_CARBS
+    for iso in isos:
+        while gi < len(goals) and goals[gi]["goal_date"] <= iso:
+            goal = _clean_num(goals[gi]["net_carbs_goal"])
+            gi += 1
+        e, m = food.get(iso), measured.get(iso, {})
+        net = _round(e["net"] or 0.0) if e else None
+        gki = None
+        if m.get("ketones_mmol") and m.get("glucose_mmol") is not None:
+            gki = _round(m["glucose_mmol"] / m["ketones_mmol"])
+        fast = fasted.get(iso, e["fasting"] if e else None)
+        out.append({
+            "date": format_date(iso),
+            "count": e["count"] if e else 0,
+            "net_carbs_g": net,
+            "goal": goal,
+            "over_goal": net is not None and net > goal,
+            "calories": _round(e["calories"]) if e else None,
+            "fat_g": _round(e["fat"]) if e else None,
+            "protein_g": _round(e["protein"]) if e else None,
+            "fast_hours": _round(fast),
+            "first_time": e["first_time"] if e else None,
+            "last_time": e["last_time"] if e else None,
+            **{f: m.get(f) for f in MEASURE_FIELDS},
+            "gki": gki,
+            "water_ml": water.get(iso),
+        })
+
+    done = [d for d in out if d["count"] and d["date"] != format_date(today)]
+    fat_k = sum((d["fat_g"] or 0) * 9 for d in done)
+    pro_k = sum((d["protein_g"] or 0) * 4 for d in done)
+    carb_k = sum(d["net_carbs_g"] * 4 for d in done)
+    energy = fat_k + pro_k + carb_k
+    fasts = [d["fast_hours"] for d in out if d["fast_hours"]]
+    windows = [d for d in done if d["first_time"] and d["last_time"]]
+    mins = lambda t: int(t[:2]) * 60 + int(t[3:5])
+    summary = {
+        "logged_days": len(done),
+        "within_goal_days": sum(1 for d in done if not d["over_goal"]),
+        "average": {f: _avg([d[f] for d in done if d[f] is not None])
+                    for f in ("net_carbs_g", "calories", "fat_g", "protein_g")},
+        "macro_pct": {"fat": round(fat_k / energy * 100), "protein": round(pro_k / energy * 100),
+                      "net_carbs": round(carb_k / energy * 100)} if energy > 0 else None,
+        "fasting": {"days": len(fasts), "average_hours": _avg(fasts),
+                    "longest_hours": max(fasts) if fasts else None},
+        "eating": {
+            "days": len(windows),
+            "average_window_hours": _avg([(mins(d["last_time"]) - mins(d["first_time"])) / 60
+                                          for d in windows]),
+            "average_first_time": _avg_time([d["first_time"] for d in windows]),
+            "average_last_time": _avg_time([d["last_time"] for d in windows]),
+        },
+        "measurements": {f: _series_stats(out, f) for f in tuple(MEASURE_FIELDS) + ("gki",)},
+        "streak": days_overview(None, 1)["streak"],
+    }
+    return {
+        "from": format_date(start),
+        "to": format_date(today),
+        "first_date": format_date(first),
+        "days": out,
+        "summary": summary,
+        "foods": [{"item": r["item"], "times": r["times"], "net_carbs_g": _round(r["net"]),
+                   "calories": _round(r["calories"]),
+                   "share_pct": round(r["net"] / total_net * 100) if total_net else 0}
+                  for r in tops],
+        "total_net_carbs_g": _round(total_net or 0.0),
+    }
+
+
 # ---- export --------------------------------------------------------------
 
 EXPORT_TABLES = {

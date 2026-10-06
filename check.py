@@ -5,6 +5,7 @@ an ephemeral loopback port, so it works whether keto.service is running or
 not and never touches data/keto.sqlite. Exit code 0 means all checks passed.
 """
 
+from datetime import date
 import json
 import os
 import subprocess
@@ -128,6 +129,7 @@ def run_http_checks():
         run_fast_checks(base)
         run_goal_checks(base)
         run_body_checks(base)
+        run_insights_checks(base)
 
         status, body = http(base, "GET", "/api/foods")
         foods = json.loads(body)
@@ -272,6 +274,64 @@ def run_goal_checks(base):
           len(o["days"]) == 7 and o["streak"]["current"] == 2, o["streak"])
     rec = json.loads(http(base, "GET", "/api/recent?n=60")[1])
     check("recent uses per-day goals", {r["date"]: r["goal"] for r in rec}.get("01/03/2026") == 30, rec)
+
+
+def run_insights_checks(base):
+    def get(path):
+        status, body = http(base, "GET", path)
+        return status, json.loads(body)
+
+    today = db.format_date(db.today_iso())
+    status, r = get("/api/insights")
+    days = r["days"]
+    first = json.loads(http(base, "GET", "/api/day")[1])["first_date"]
+    isos = [db.parse_date(d["date"]) for d in days]
+    check("insights: every calendar day from the first tracked day to today", status == 200
+          and r["from"] == first == days[0]["date"] and r["to"] == today == days[-1]["date"]
+          and all((date.fromisoformat(b) - date.fromisoformat(a)).days == 1 for a, b in zip(isos, isos[1:])),
+          (r["from"], r["to"], len(days)))
+    by = {d["date"]: d for d in days}
+    ok = True
+    for d in ("01/03/2026", "02/03/2026", "04/03/2026"):
+        full = json.loads(http(base, "GET", f"/api/day?date={d}")[1])
+        row = by[d]
+        ok = ok and row["count"] == full["count"] and row["goal"] == full["goal"] \
+            and row["over_goal"] == full["over_goal"] \
+            and row["net_carbs_g"] == (full["totals"]["net_carbs_g"] if full["count"] else None) \
+            and row["calories"] == full["totals"]["calories"] \
+            and all(row[f] == full["body"][f] for f in db.MEASURE_FIELDS) and row["gki"] == full["body"]["gki"]
+    check("insights: day rows match /api/day totals, goals and latest readings", ok, [by[d] for d in ("01/03/2026", "02/03/2026")])
+    fasted = [d for d in days if d["fast_hours"]]
+    full = json.loads(http(base, "GET", f"/api/day?date={fasted[0]['date']}")[1]) if fasted else None
+    check("insights: fast hours are the fasts that ended that day, else the entries' hours",
+          bool(fasted) and fasted[0]["fast_hours"] == (full["fast_hours"] or full["totals"]["fasting_hours"]), fasted[:1])
+    s = r["summary"]
+    logged = [d for d in days if d["count"] and d["date"] != today]
+    check("insights: averages and days within goal over logged days",
+          s["logged_days"] == len(logged)
+          and s["within_goal_days"] == sum(1 for d in logged if not d["over_goal"])
+          and abs(s["average"]["net_carbs_g"] - sum(d["net_carbs_g"] for d in logged) / len(logged)) < 0.01
+          and sum(s["macro_pct"].values()) in (99, 100, 101) and "current" in s["streak"], s)
+    w = s["measurements"]["weight_kg"]
+    ws = [d["weight_kg"] for d in days if d["weight_kg"] is not None]
+    check("insights: measurement stats", bool(ws) and w["days"] == len(ws) and w["first"] == ws[0]
+          and w["last"] == ws[-1] and w["min"] == min(ws) and w["max"] == max(ws), w)
+    foods = r["foods"]
+    check("insights: foods ordered by net carbs, Hebrew intact",
+          foods == sorted(foods, key=lambda x: -x["net_carbs_g"]) and len(foods) <= db.TOP_FOODS
+          and any(any("\u05d0" <= c <= "\u05ea" for c in x["item"]) for x in foods) and all(0 <= x["share_pct"] <= 100 for x in foods), foods)
+
+    status, body = http(base, "POST", "/api/entries", {"date": today, "item": "today so far", "net_carbs_g": 999})
+    eid = json.loads(body)["created"][0]["id"]
+    status, r7 = get("/api/insights?days=7")
+    check("insights: days=7 is the last 7 days; today is charted but left out of the averages",
+          len(r7["days"]) == 7 and r7["days"][-1]["net_carbs_g"] == 999 and r7["days"][-1]["over_goal"]
+          and r7["summary"]["logged_days"] == 0 and r7["summary"]["average"]["net_carbs_g"] is None
+          and r7["summary"]["macro_pct"] is None, r7["summary"])
+    http(base, "DELETE", f"/api/entries/{eid}")
+    check("insights: all and a huge range both start at the first tracked day",
+          get("/api/insights?days=all")[1]["from"] == first and get("/api/insights?days=99999")[1]["from"] == first)
+    check("insights: reject bad days", get("/api/insights?days=0")[0] == 400 and get("/api/insights?days=x")[0] == 400)
 
 
 def run_body_checks(base):
