@@ -92,10 +92,15 @@ function blankForm(keep) {
     date: "", time: hm(now()), meal: "", fasting_hours: "", notes: "", suggest: false }, keep || {});
 }
 
+const hashView = () => ["insights", "coach"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "day";
+
 const S = {
   date: today(),
-  view: location.hash === "#insights" ? "insights" : "day",
-  ins: { range: loadRange(), data: null, err: "", seq: 0 },
+  view: hashView(),
+  ins: { range: loadRange(), data: null, err: "", seq: 0, review: null },
+  ai: { enabled: false, model: null, vision: false },
+  aiFood: null,                                           // set below (blankAiFood)
+  coach: { msgs: [], busy: false, err: "", draft: "", seq: 0 },
   day: null, week: null,
   top: [], foods: [], meals: [], sugg: [],
   fastTarget: loadTarget(),
@@ -175,6 +180,7 @@ function render() {
   document.body.dataset.view = S.view;
   paint("tabs", renderTabs());
   paint("insights", S.view === "insights" ? renderInsights() : "");
+  paint("coach", S.view === "coach" ? renderCoach() : "");
   paint("nav", renderNav());
   document.getElementById("glance").className = "glance " + (d.over_goal ? "is-over" : "is-under");
   paint("glance", renderGlance(d));
@@ -525,7 +531,7 @@ function renderPinbar(d) {
 function renderSheet(d) {
   if (!S.ui.sheet) return "";
   const inner = S.ui.sheet === "copy" ? renderCopyPanel(d) : S.ui.sheet === "measure" ? renderMeasureForm(d)
-    : S.ui.sheet === "import" ? renderImport() : renderAddForm(d);
+    : S.ui.sheet === "import" ? renderImport() : S.ui.sheet === "ai" ? renderAiReview() : renderAddForm(d);
   return `<div class="scrim" data-act="close-sheet"></div>
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title"><div class="grab" aria-hidden="true"></div>${inner}</div>`;
 }
@@ -540,6 +546,7 @@ function renderAddForm(d) {
   return `
     <div class="sheet-h"><h2 id="sheet-title">${title}</h2><button type="button" class="icon-btn" data-act="close-sheet" aria-label="Close">&times;</button></div>
     <form class="form" data-form="entry" autocomplete="off" novalidate>
+      ${renderAiBox()}
       <div class="item-wrap">
         <label class="field">Item<input name="item" dir="auto" value="${esc(f.item)}" required role="combobox" aria-expanded="${f.suggest}" aria-controls="sugg" enterkeyhint="done"></label>
         <ul class="sugg" id="sugg" role="listbox"${f.suggest && S.sugg.length ? "" : " hidden"}>${renderSuggestions()}</ul>
@@ -742,17 +749,16 @@ function loadInsights() {
 }
 
 function setView(v) {
-  S.view = v === "insights" ? "insights" : "day";
-  if ((location.hash === "#insights") !== (S.view === "insights")) {
-    history.replaceState(null, "", S.view === "insights" ? "#insights" : location.pathname + location.search);
-  }
-  if (S.view === "insights") { S.ui.sheet = null; loadInsights(); } else load();
+  S.view = v === "insights" || (v === "coach" && S.ai.enabled) ? v : "day";
+  if (hashView() !== S.view) history.replaceState(null, "", S.view === "day" ? location.pathname + location.search : "#" + S.view);
+  if (S.view !== "day") S.ui.sheet = null;
+  if (S.view === "insights") loadInsights(); else if (S.view === "day") load();
   render();
-  window.scrollTo(0, 0);
+  if (S.view === "coach") paintCoach(true); else window.scrollTo(0, 0);
 }
 
 function renderTabs() {
-  return [["day", "Day"], ["insights", "Insights"]].map(([v, label]) =>
+  return [["day", "Day"], ["insights", "Insights"]].concat(S.ai.enabled ? [["coach", "Coach"]] : []).map(([v, label]) =>
     `<button type="button" role="tab" aria-selected="${S.view === v}" data-act="view" data-view="${v}">${label}</button>`).join("");
 }
 
@@ -820,7 +826,7 @@ function renderInsights() {
     return head + sub + `<p class="empty">Nothing logged in this range yet.</p>`;
   }
   return head + sub + (I.err ? `<p class="error">${esc(I.err)}</p>` : "")
-    + renderInsStats(r) + renderInsCarbs(r) + renderInsEnergy(r) + renderInsFasting(r) + renderInsBody(r) + renderInsFoods(r);
+    + renderInsStats(r) + renderInsReview(r) + renderInsCarbs(r) + renderInsEnergy(r) + renderInsFasting(r) + renderInsBody(r) + renderInsFoods(r);
 }
 
 function renderInsStats(r) {
@@ -846,7 +852,7 @@ function renderInsCarbs(r) {
     cls: d => d.over_goal ? "over" : "",
     tip: (d, v) => `${g(v)} of ${g(d.goal)} g${d.over_goal ? ", over" : ""}`,
     label: `Net carbs per day, ${dm(r.from)} to ${dm(r.to)}. ${rest}`,
-  }) + `<p class="legend"><span class="key line"></span>goal</p>`);
+  }) + `<p class="legend"><span class="sw line"></span>goal</p>`);
 }
 
 function renderInsEnergy(r) {
@@ -856,7 +862,7 @@ function renderInsEnergy(r) {
   const split = m ? `
     <div class="split" role="img" aria-label="Energy: fat ${m.fat}%, protein ${m.protein}%, net carbs ${m.net_carbs}%">
       <i class="fat" style="width:${m.fat}%"></i><i class="pro" style="width:${m.protein}%"></i><i class="carb" style="width:${m.net_carbs}%"></i></div>
-    <p class="legend num"><span><span class="key fat"></span>fat ${m.fat}% · ${Math.round(av.fat_g)} g</span><span><span class="key pro"></span>protein ${m.protein}% · ${Math.round(av.protein_g)} g</span><span><span class="key carb"></span>net carbs ${m.net_carbs}% · ${g(av.net_carbs_g)} g</span></p>` : "";
+    <p class="legend num"><span><span class="sw fat"></span>fat ${m.fat}% · ${Math.round(av.fat_g)} g</span><span><span class="sw pro"></span>protein ${m.protein}% · ${Math.round(av.protein_g)} g</span><span><span class="sw carb"></span>net carbs ${m.net_carbs}% · ${g(av.net_carbs_g)} g</span></p>` : "";
   return insSection("energy", "Energy and macros", rest, barChart("energy", r.days, {
     val: d => d.calories, unit: "kcal", rest, tone: "ink",
     tip: (d, v) => `${thousands(v)} kcal${d.fat_g != null ? ` · fat ${Math.round(d.fat_g)} g` : ""}${d.protein_g != null ? ` · protein ${Math.round(d.protein_g)} g` : ""}`,
@@ -874,7 +880,7 @@ function renderInsFasting(r) {
     val: d => d.fast_hours, line: target ? () => target : null, unit: "h", rest, tone: "sky",
     tip: (d, v) => `${dur(v)} fasted`,
     label: `Fasting hours per day, ${dm(r.from)} to ${dm(r.to)}. ${rest}, longest ${g(f.longest_hours)} h`,
-  }) + (target ? `<p class="legend"><span class="key line"></span>${target} h target</p>` : "") + eating);
+  }) + (target ? `<p class="legend"><span class="sw line"></span>${target} h target</p>` : "") + eating);
 }
 
 function renderInsBody(r) {
@@ -952,6 +958,198 @@ function scrubEnd(ev) {
 document.addEventListener("pointerdown", scrub);
 document.addEventListener("pointermove", scrub);
 document.addEventListener("pointerout", ev => { if (ev.pointerType === "mouse") scrubEnd(ev); });
+
+/* =========================================================================
+   Assistant — food rows from words or a photo, the coach, the written review.
+   The model only proposes; rows are saved by the user through /api/entries.
+   ========================================================================= */
+const BASIS = { history: "from your log", label: "from the label", estimate: "estimate" };
+const blankAiFood = () => ({ text: "", busy: false, err: "", note: "", rows: null, from: "add", date: "", time: "", meal: "" });
+
+function loadAi() {
+  return api("/api/ai").then(a => {
+    S.ai = a;
+    if (!a.enabled && S.view === "coach") setView("day"); else render();
+  }).catch(() => {});
+}
+
+function renderAiBox() {
+  const a = S.aiFood;
+  if (!S.ai.enabled || S.ui.sheet !== "add") return "";
+  return `
+    <div class="ai-box">
+      <label class="field">Describe it, in your own words<textarea name="ai_text" dir="auto" rows="2" placeholder="3 eggs fried in butter and half an avocado">${esc(a.text)}</textarea></label>
+      <div class="row-btns">
+        <button type="button" class="btn btn-primary" data-act="ai-fill" id="ai-fill"${a.busy ? " disabled" : ""}>${a.busy ? "Working…" : "Fill in"}</button>
+        ${S.ai.vision ? `<label class="btn filebtn${a.busy ? " off" : ""}">Photo<input type="file" accept="image/*" data-file="ai-photo" class="sr"${a.busy ? " disabled" : ""}></label>` : ""}
+        <span class="muted ai-by">${esc(S.ai.model)}</span>
+      </div>
+      <p class="error" id="ai-err" role="alert">${esc(a.err)}</p>
+      ${a.note ? `<p class="hint" role="status" dir="auto">${esc(a.note)}</p>` : ""}
+    </div>`;
+}
+
+// Downscale a photo in the browser: at most 1280 px on the long side, JPEG.
+function shrinkImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, 1280 / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(img.width * k)); c.height = Math.max(1, Math.round(img.height * k));
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL("image/jpeg", .8));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("That photo could not be read.")); };
+    img.src = url;
+  });
+}
+
+function openReview(rows, from) {
+  const a = S.aiFood, time = hm(now());
+  a.rows = rows.map(r => ({ on: true, item: r.item, quantity: r.quantity || "", basis: r.basis,
+    net_carbs_g: str(r.net_carbs_g), calories: str(r.calories), fat_g: str(r.fat_g), protein_g: str(r.protein_g) }));
+  a.from = from;
+  a.date = from === "add" ? (S.form.date || S.date) : today();
+  a.time = from === "add" && S.form.time ? S.form.time : time;
+  a.meal = from === "add" ? S.form.meal : "";
+  S.ui.sheet = "ai"; S.ui.error = ""; S.ui.busy = false;
+  render();
+}
+
+function aiFill(image) {
+  const a = S.aiFood;
+  if (a.busy) return;
+  if (!image && !a.text.trim()) { a.err = "Write what you ate first."; render(); return; }
+  a.busy = true; a.err = ""; a.note = "";
+  render();
+  send("POST", "/api/ai/food", image ? { text: a.text, image } : { text: a.text }).then(res => {
+    a.busy = false;
+    if (!res.rows.length) { a.note = res.question || "Nothing to log was found. Try saying it another way."; render(); return; }
+    a.note = res.dropped ? `${res.dropped} ${res.dropped === 1 ? "row" : "rows"} could not be read and were left out.` : "";
+    if (S.ui.sheet === "add") openReview(res.rows, "add");
+  }).catch(e => { a.busy = false; a.err = e.message; if (S.ui.sheet === "add") render(); });
+}
+
+function aiTotals() {
+  const on = S.aiFood.rows.filter(r => r.on);
+  const sum = k => on.reduce((t, r) => t + (num(r[k]) || 0), 0);
+  return { n: on.length, net: sum("net_carbs_g"), kcal: sum("calories") };
+}
+function renderAiTotal() {
+  const t = aiTotals(), a = S.aiFood;
+  if (!t.n) return "Nothing selected.";
+  const left = a.date === S.date && S.day ? ` · ${g(Math.abs(S.day.goal - (S.day.totals.net_carbs_g || 0) - t.net))} g ${S.day.goal - (S.day.totals.net_carbs_g || 0) - t.net < 0 ? "over" : "left"} after this` : "";
+  return `Selected: ${g(t.net)} g net carbs · ${kcal(t.kcal)} kcal${left}`;
+}
+const aiSaveLabel = () => { const n = aiTotals().n; return n ? `Save ${n} ${n === 1 ? "row" : "rows"}` : "Save"; };
+
+function renderAiReview() {
+  const a = S.aiFood;
+  const cell = (i, k, label, v, key) => `<label class="field${key ? " key" : ""}">${label}<input name="${k}_${i}" inputmode="decimal" value="${esc(v)}"></label>`;
+  const rows = a.rows.map((r, i) => `<li class="${r.on ? "" : "off"}">
+      <div class="ai-top">
+        <input type="checkbox" name="on_${i}" aria-label="Save this row"${r.on ? " checked" : ""}>
+        <input class="ai-item" name="item_${i}" dir="auto" aria-label="Item" value="${esc(r.item)}">
+        <span class="tag ${r.basis}">${BASIS[r.basis]}</span>
+      </div>
+      <input class="ai-q" name="quantity_${i}" dir="auto" aria-label="Quantity" placeholder="Quantity" value="${esc(r.quantity)}">
+      <div class="grid4">${cell(i, "net_carbs_g", "Net carbs", r.net_carbs_g, true)}${cell(i, "calories", "kcal", r.calories)}${cell(i, "fat_g", "Fat", r.fat_g)}${cell(i, "protein_g", "Protein", r.protein_g)}</div>
+    </li>`).join("");
+  const meals = S.meals.map(m => `<option value="${esc(m)}"></option>`).join("");
+  return `
+    <div class="sheet-h"><h2 id="sheet-title">Review before saving</h2><button type="button" class="icon-btn" data-act="close-sheet" aria-label="Close">&times;</button></div>
+    <form class="form" data-form="ai-save" autocomplete="off" novalidate>
+      <p class="muted hint">Filled in by ${esc(S.ai.model)}. Numbers marked “estimate” are a guess: check them before saving.</p>
+      <ul class="ai-rows">${rows}</ul>
+      <div class="grid2">
+        <label class="field">Date<input type="date" name="date" value="${dmyToIso(a.date)}" max="${dmyToIso(today())}"></label>
+        <label class="field">Time<input type="time" name="time" value="${esc(a.time)}"></label>
+      </div>
+      <label class="field">Meal<input name="meal" dir="auto" list="meals" value="${esc(a.meal)}"></label>
+      <datalist id="meals">${meals}</datalist>
+      <p class="preview num" id="ai-total">${renderAiTotal()}</p>
+      <p class="error" id="form-error" role="alert">${esc(S.ui.error)}</p>
+      <div class="sheet-actions">
+        <button type="button" class="btn" data-act="ai-back">${a.from === "add" ? "Back" : "Cancel"}</button>
+        <button class="btn btn-primary" id="ai-go"${S.ui.busy || !aiTotals().n ? " disabled" : ""}>${aiSaveLabel()}</button>
+      </div>
+    </form>`;
+}
+
+/* ---------- coach ---------- */
+const COACH_STARTERS = ["What can I still eat today?", "How was my week?", "Dinner ideas under 8 g net carbs", "Where do my carbs come from?"];
+
+function renderCoach() {
+  const c = S.coach;
+  const msgs = c.msgs.map((m, i) => `<div class="msg ${m.role === "user" ? "me" : "bot"}">
+      <p dir="auto">${esc(m.content)}</p>
+      ${m.rows && m.rows.length ? `<ul class="msg-rows num">${m.rows.map(r => `<li><span class="it">${ut(r.item)}${r.quantity ? ` <small>${ut(r.quantity)}</small>` : ""}</span><span>${g(r.net_carbs_g)} g</span></li>`).join("")}</ul>
+      <button type="button" class="btn btn-primary" data-act="coach-review" data-i="${i}">Review and add</button>` : ""}
+    </div>`).join("");
+  const starters = !c.msgs.length ? `<div class="starters">${COACH_STARTERS.map((s, i) => `<button type="button" class="chip" data-act="coach-ask" data-i="${i}">${s}</button>`).join("")}</div>` : "";
+  return `
+    <header class="ins-h"><h1>Coach</h1>${c.msgs.length ? `<button type="button" class="link" data-act="coach-clear">New chat</button>` : ""}</header>
+    <p class="ins-sub">Sees your log from the last 14 days. Answers come from ${esc(S.ai.model || "the model")} and are not medical advice.</p>
+    ${starters}
+    <div class="thread" id="thread" aria-live="polite">${msgs}${c.busy ? `<div class="msg bot wait"><p>Thinking…</p></div>` : ""}</div>
+    ${c.err ? `<p class="error" role="alert">${esc(c.err)} <button type="button" class="link" data-act="coach-retry">Try again</button></p>` : ""}
+    <form class="coach-bar" data-form="coach" novalidate><div class="pinbar-in">
+      <textarea name="q" dir="auto" rows="1" enterkeyhint="send" aria-label="Message" placeholder="Ask, or say what to log">${esc(c.draft)}</textarea>
+      <button class="btn btn-primary"${c.busy ? " disabled" : ""}>Send</button></div></form>`;
+}
+
+function paintCoach(focus) {
+  paint("coach", renderCoach());
+  window.scrollTo(0, document.documentElement.scrollHeight);
+  if (focus) { const t = document.querySelector("#coach [name=q]"); if (t) t.focus(); }
+}
+
+function coachSend(text) {
+  const c = S.coach;
+  if (c.busy) return;
+  if (text != null) {
+    text = text.trim();
+    if (!text) return;
+    c.msgs.push({ role: "user", content: text });
+    c.draft = "";
+  }
+  c.busy = true; c.err = "";
+  paintCoach();
+  const seq = ++c.seq;
+  send("POST", "/api/ai/chat", { messages: c.msgs.map(m => ({ role: m.role, content: m.content })) }).then(res => {
+    if (seq !== c.seq) return;
+    c.busy = false;
+    c.msgs.push({ role: "assistant", content: res.reply, rows: res.rows });
+    if (S.view === "coach") paintCoach();
+  }).catch(e => { if (seq === c.seq) { c.busy = false; c.err = e.message; if (S.view === "coach") paintCoach(); } });
+}
+
+/* ---------- written review on Insights ---------- */
+function renderInsReview(r) {
+  if (!S.ai.enabled || !r.summary.logged_days) return "";
+  const v = S.ins.review;
+  const mine = v && v.range === S.ins.range ? v : null;
+  const body = !mine ? `<p class="muted">A short written review of this range, from the numbers on this page.</p>`
+    : mine.busy ? `<p class="muted">Writing…</p>`
+    : mine.err ? `<p class="error" role="alert">${esc(mine.err)}</p>`
+    : `<p class="review" dir="auto">${esc(mine.text)}</p><p class="muted hint num">${esc(mine.model || "")} · ${esc(mine.generated_at)}</p>`;
+  return `
+    <section class="ins-sec" data-ins="review">
+      <div class="sec-h"><h2>Written review</h2><button type="button" class="link" data-act="ins-review"${mine && mine.busy ? " disabled" : ""}>${mine && mine.text ? "Write again" : "Write it"}</button></div>
+      ${body}
+    </section>`;
+}
+function insReview() {
+  const range = S.ins.range, again = !!(S.ins.review && S.ins.review.range === range && S.ins.review.text);
+  S.ins.review = { range, busy: true };
+  paint("insights", renderInsights());
+  send("POST", "/api/ai/summary", { days: range, refresh: again })
+    .then(res => { if (S.ins.review.range === range) S.ins.review = Object.assign({ range }, res); })
+    .catch(e => { if (S.ins.review.range === range) S.ins.review = { range, err: e.message }; })
+    .then(() => { if (S.view === "insights") paint("insights", renderInsights()); });
+}
 
 /* =========================================================================
    Actions
@@ -1035,6 +1233,7 @@ function startEdit(id) {
 function openAdd() {
   S.ui.sheet = "add"; S.ui.editingId = null; S.ui.error = "";
   S.form = blankForm();
+  S.aiFood = blankAiFood();
   if (S.pendingFastHours != null) {
     S.form.fasting_hours = g(S.pendingFastHours);
     S.ui.open.form = true;
@@ -1174,6 +1373,15 @@ document.addEventListener("click", ev => {
   const act = el.dataset.act, id = +el.dataset.id, d = day();
   switch (act) {
     case "view": if (el.dataset.view !== S.view) setView(el.dataset.view); return;
+    case "ai-fill": aiFill(); return;
+    case "ai-back":
+      if (S.aiFood.from === "add") { S.ui.sheet = "add"; S.ui.error = ""; S.ui.busy = false; } else closeSheet();
+      break;
+    case "coach-ask": coachSend(COACH_STARTERS[+el.dataset.i]); return;
+    case "coach-retry": coachSend(null); return;
+    case "coach-clear": S.coach = { msgs: [], busy: false, err: "", draft: "", seq: S.coach.seq + 1 }; paintCoach(true); return;
+    case "coach-review": { const m = S.coach.msgs[+el.dataset.i]; if (m && m.rows) { S.aiFood = blankAiFood(); openReview(m.rows, "coach"); } return; }
+    case "ins-review": insReview(); return;
     case "ins-range":
       S.ins.range = el.dataset.range; saveRange(S.ins.range);
       paint("insights", renderInsights());
@@ -1264,6 +1472,19 @@ document.addEventListener("input", ev => {
     return;
   }
   if (form === "import") { S.imp.text = t.value; previewImport(); return; }
+  if (t.name === "ai_text") { S.aiFood.text = t.value; return; }
+  if (form === "coach") { S.coach.draft = t.value; return; }
+  if (form === "ai-save") {
+    const a = S.aiFood, m = /^(on|item|quantity|net_carbs_g|calories|fat_g|protein_g)_(\d+)$/.exec(t.name);
+    if (m) {
+      a.rows[+m[2]][m[1]] = m[1] === "on" ? t.checked : t.value;
+      if (m[1] === "on") t.closest("li").classList.toggle("off", !t.checked);
+    } else if (t.name === "date") a.date = t.value ? isoToDmy(t.value) : a.date;
+    else if (t.name === "time" || t.name === "meal") a[t.name] = t.value;
+    document.getElementById("ai-total").innerHTML = renderAiTotal();
+    const go = document.getElementById("ai-go"); go.textContent = aiSaveLabel(); go.disabled = !aiTotals().n;
+    return;
+  }
   if (form !== "entry") return;
   const f = S.form;
   if (t.name === "item") {
@@ -1289,6 +1510,11 @@ document.addEventListener("input", ev => {
 });
 
 document.addEventListener("change", ev => {
+  if (ev.target.dataset.file === "ai-photo") {
+    const file = ev.target.files && ev.target.files[0];
+    if (file) shrinkImage(file).then(aiFill).catch(e => { S.aiFood.err = e.message; render(); });
+    return;
+  }
   if (ev.target.dataset.actChange === "target") {
     S.fastTarget = +ev.target.value; saveTarget(S.fastTarget);
     paint("glance", renderGlance(day()));
@@ -1362,6 +1588,29 @@ document.addEventListener("submit", ev => {
     }).catch(e => { S.ui.busy = false; S.ui.error = e.message; render(); });
     return;
   }
+  if (kind === "coach") { coachSend(String(data.get("q") || "")); return; }
+  if (kind === "ai-save") {
+    const a = S.aiFood, rows = a.rows.filter(r => r.on);
+    const fails = msg => { S.ui.error = msg; document.getElementById("form-error").textContent = msg; };
+    const entries = rows.map(r => ({ date: a.date, time: a.time || null, item: r.item, quantity: r.quantity.trim() ? r.quantity : null,
+      net_carbs_g: numOrNull(r.net_carbs_g), calories: numOrNull(r.calories), fat_g: numOrNull(r.fat_g), protein_g: numOrNull(r.protein_g),
+      meal: a.meal.trim() ? a.meal : null }));
+    if (!entries.length) return fails("Nothing selected.");
+    if (entries.some(e => !e.item.trim())) return fails("Every row needs an item name.");
+    if (entries.some(e => e.net_carbs_g == null || MACROS.some(k => e[k] != null && isNaN(e[k])))) return fails("Every row needs net carbs, and numbers only.");
+    S.ui.error = ""; S.ui.busy = true; document.getElementById("ai-go").disabled = true;
+    const from = a.from;
+    send("POST", "/api/entries", entries).then(res => {
+      const ids = res.created.map(x => x.id), net = entries.reduce((t, e) => t + e.net_carbs_g, 0);
+      closeSheet(); loadLists();
+      S.aiFood = blankAiFood();
+      toast(`Added ${ids.length} ${ids.length === 1 ? "row" : "rows"} · ${g(net)} g${a.date !== S.date || from !== "add" ? ` to ${a.date.slice(0, 5)}` : ""}`,
+        () => Promise.all(ids.map(id => api(`/api/entries/${id}`, { method: "DELETE" }))));
+      if (from !== "add") { render(); return; }
+      if (a.date !== S.date) goTo(a.date); else load();
+    }).catch(e => { S.ui.busy = false; S.ui.error = e.message; render(); });
+    return;
+  }
   if (kind === "import") {
     S.imp.busy = true; refreshImport();
     send("POST", "/api/import", { text: S.imp.text }).then(res => {
@@ -1432,6 +1681,9 @@ document.addEventListener("submit", ev => {
 });
 
 document.addEventListener("keydown", ev => {
+  if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && ev.target.name === "q" && ev.target.form && ev.target.form.dataset.form === "coach") {
+    ev.preventDefault(); coachSend(ev.target.value); return;
+  }
   if (ev.key === "Escape" && S.ui.sheet) { closeSheet(); render(); }
 });
 
@@ -1440,15 +1692,14 @@ setInterval(() => {
   if (day().active_fast && !S.ui.goalEdit && !S.ui.fastAdjust) paint("glance", renderGlance(day()));
 }, TICK_MS);
 
-window.addEventListener("hashchange", () => {
-  const v = location.hash === "#insights" ? "insights" : "day";
-  if (v !== S.view) setView(v);
-});
+window.addEventListener("hashchange", () => { if (hashView() !== S.view) setView(hashView()); });
 // iOS Safari ignores user-scalable=no; cancel its pinch gesture as well.
 for (const t of ["gesturestart", "gesturechange"]) document.addEventListener(t, ev => ev.preventDefault(), { passive: false });
 
+S.aiFood = blankAiFood();
 render();
 loadLists();
 load();
+loadAi();
 if (S.view === "insights") loadInsights();
 })();

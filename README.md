@@ -32,6 +32,7 @@ The layout follows `design/redesign.html` (PR #1), top to bottom:
 - **Log**: entries in time order, grouped into runs by meal with a carb subtotal and Copy per meal. Each row is one line (time, item and quantity, net carbs); tap it for notes, macros, "added by agent" for MCP rows, and Edit / Log again now / Delete. Delete has Undo (the row comes back with its id and source). "Copy entries to another day" opens a checklist sheet with a target day and "keep times"; Undo removes the copies.
 - **Week / Fasting / Body** (collapsed): the 7-day strip of net carbs against each day's goal (tap a day to open it) with average, days within goal and streak; fasting with a date-time field for when the fast really started or stopped, the target (default 16 h, remembered in this browser), and the running and ended fasts with Edit / Delete; body: the day's measurements with Edit / Delete and Add measurement, the latest value of each (a later time wins; untimed readings count as the start of the day), GKI (latest glucose ÷ latest ketones) with its band, change since the previous day's weight, a 30-day weight line (each day's last weight), and water (+250 / +500 / −250).
 - **Insights tab** (top of the page, also at `/#insights`): progress over the last 7, 30 or 90 days or everything since the first tracked day (the range is remembered in this browser). Tiles for average net carbs, share of days within goal, streak, average energy, average fast and weight change; a bar per day for net carbs (against each day's goal), energy and fasting hours (against the fast target); the fat / protein / net-carb split of energy; the average eating window; a line for each of weight, ketones, glucose (in the chosen unit), GKI, blood pressure and pulse that has readings; and the foods that brought the most net carbs. Touch or hover a chart to read a single day. Averages, days within goal and the macro split leave out today, which is still in progress.
+- **Assistant** (only when a model is set up, see *Assistant setup*): in **Add food**, describe what you ate in your own words (Hebrew or English) and tap **Fill in**, or tap **Photo** for a plate or a nutrition label (needs a vision model). The model answers with rows, each tagged *from your log* (numbers scaled from a food you logged before), *from the label* or *estimate*. You edit, untick and set date / time / meal in a review sheet; nothing is saved until **Save**, and the toast has Undo. The **Coach** tab is a chat that sees today and the last 14 days (entries, goal, fasts, measurements, top carb foods); when it proposes food, **Review and add** opens the same review sheet. On **Insights**, **Written review** writes a short review of the selected range. The chat is kept only in the open page. The model never writes to the log.
 - **Zoom**: pinch and double-tap zoom are turned off (viewport, `touch-action`, and the iOS gesture events).
 - **Measure** (pinned bar, next to Add food): a sheet with date, time (default now), blood pressure (systolic / diastolic, mmHg), weight (kg), blood ketones (mmol/L), glucose (mmol/L or mg/dL: a switch next to the field, remembered in this browser and used everywhere glucose is shown; stored as mmol/L, 1 mmol/L = 18.016 mg/dL), pulse (bpm) and notes. Any subset; blood pressure needs both numbers. Several measurements per day are fine.
 - **Import from sheet** (footer): paste rows copied from the old Google Sheet (tab-separated, or tabs turned into four spaces), columns: date, time (HH:MM or HH:MM:SS), fasting hours, item, quantity, calories, fat, protein, net carbs, notes. A live preview lists what will be added. Rows whose item starts with `סה"כ` are meal totals: skipped, and the rest of their name becomes the meal of the rows with the same date and time. Rows already in the log (same date, time, item, quantity) are skipped; a row that fails validation blocks the import. Imported rows get `source = "sheet"`; the notice offers Undo.
@@ -53,6 +54,11 @@ Light and dark follow the system setting.
 - `GET /api/foods` — latest row per distinct item, most recent first (used for suggestions); `?top=8` gives the most-logged items of the last 30 days
 - `GET /api/meals` — past meal names, most used first
 - `GET /api/days?end=DD/MM/YYYY&n=7` — calendar-day summaries oldest first (empty days included), average, days within goal, `streak {current, best}`
+- `GET /api/ai` — `{enabled, model, vision}`; never the key
+- `POST /api/ai/food` `{text, image}` (`image`: JPEG / PNG / WebP data URL, body up to 4 MB) — `{rows[], dropped, question}`; rows are `{item, quantity, net_carbs_g, calories, fat_g, protein_g, basis}` and are **not** saved
+- `POST /api/ai/chat` `{messages: [{role, content}]}` — `{reply, rows[]}`
+- `POST /api/ai/summary` `{days, refresh}` — `{text, from, to, generated_at, model}`; the same numbers are answered from memory unless `refresh`
+- Assistant errors: 503 when not set up, 502 when the model service fails
 - `GET /api/insights?days=30` — `days` is a count or `all` (default), ending today and never starting before the first tracked day: `days[]` (one row per calendar day: net carbs, goal, energy, fat, protein, `fast_hours`, first and last food time, the latest of each measurement, GKI, water), `summary` (averages over logged days before today, `macro_pct`, `fasting`, `eating`, per-measurement first / last / min / max / average, `streak`) and `foods` (top 8 by net carbs with their share)
 - `POST /api/measurements` — `{date, time, weight_kg, ketones_mmol, glucose_mmol, bp_sys, bp_dia, pulse, notes}`, at least one value; `PATCH` / `DELETE /api/measurements/<id>`. The day payload has `body` with the latest of each value, `gki`, `gki_band`, `weight_change_kg`, `weights`, `water_ml` and `measurements`.
 - `POST /api/body` — water: `{date, water_ml}` or `{date, add_water_ml}`; `weight_kg`, `ketones_mmol`, `glucose_mmol` here are saved as a new measurement (kept for older callers)
@@ -63,6 +69,23 @@ Old daily readings (weight, ketones, glucose in `body_log`) are moved into `meas
 - `POST /api/fasts/start`, `POST /api/fasts/stop` — body `{date, time, notes}`, all optional (default now). One fast can run at a time (409 otherwise).
 - `PATCH /api/fasts/<id>` — `start_date`, `start_time`, `end_date`, `end_time`, `notes`; `DELETE /api/fasts/<id>`
 - `POST /api/goal` — `{date, net_carbs_goal}`; `null` resets the day to its carried-over goal
+
+## Assistant setup
+
+The assistant talks to an OpenAI-compatible chat API; the defaults are for [OpenCode Zen](https://opencode.ai/docs/zen/).
+
+```
+cp llm.example.json data/llm.json && chmod 600 data/llm.json
+# put your OpenCode API key in data/llm.json
+```
+
+- `api_key` — from the OpenCode console. `data/llm.json` is git-ignored; the key stays in the server process.
+- `base_url` — `https://opencode.ai/zen/v1` (pay-as-you-go and free models) or `https://opencode.ai/zen/go/v1` (Go subscription).
+- `model` — default `space-bunny-free`. Free models come and go; current ids: `curl -s https://opencode.ai/zen/v1/models`.
+- `vision_model` — a model that accepts images; empty hides the Photo button.
+- `timeout_s` — default 60.
+
+The file is read on every call, so changes need no restart (reload the page). Without a key the app has no assistant UI and makes no outbound requests. With one, your words, photos, known foods and the log snapshot described above are sent to `base_url` over HTTPS; some free models state that prompts may be used for training, so check the model's terms. Code: `llm.py` (client), `assistant.py` (prompts and row checks).
 
 ## MCP server (stdio)
 

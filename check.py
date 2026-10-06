@@ -20,6 +20,10 @@ REAL_DB = os.path.join(HERE, "data", "keto.sqlite")
 
 tmpdir = tempfile.TemporaryDirectory(prefix="keto-check-")
 os.environ["KETO_DB"] = os.path.join(tmpdir.name, "check.sqlite")
+# The assistant must never use the real key or network here.
+os.environ["KETO_LLM_CONFIG"] = os.path.join(tmpdir.name, "llm.json")
+for _k in ("KETO_LLM_API_KEY", "KETO_LLM_BASE_URL", "KETO_LLM_MODEL", "KETO_LLM_VISION_MODEL"):
+    os.environ.pop(_k, None)
 sys.path.insert(0, HERE)
 
 import db  # noqa: E402  (must import after KETO_DB is set)
@@ -145,6 +149,7 @@ def run_http_checks():
              + [{"item": "tea", "net_carbs_g": 0, "meal": "lunch"}])
         status, body = http(base, "GET", "/api/meals")
         check("meal names, most used first", status == 200 and json.loads(body)[:2] == ["breakfast", "lunch"], body)
+        run_ai_checks(base)
         run_import_checks(base)
     finally:
         httpd.shutdown()
@@ -436,6 +441,126 @@ def run_import_checks(base):
           and json.loads(body)["count"] == 3, res)
     status, res = imp("hello", True)
     check("import rejects text without date rows", status == 400, res)
+
+
+def run_ai_checks(base):
+    """The assistant against a fake OpenAI-style server: no real network."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    fake = {"reply": "", "status": 200, "seen": []}
+
+    class Fake(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])).decode("utf-8"))
+            fake["seen"].append({"path": self.path, "auth": self.headers.get("Authorization"), "body": body})
+            out = json.dumps({"choices": [{"message": {"role": "assistant", "content": fake["reply"]}}]}
+                             if fake["status"] == 200 else {"error": {"message": "nope"}}).encode("utf-8")
+            self.send_response(fake["status"])
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+        def log_message(self, *a):
+            pass
+
+    def post(path, obj):
+        status, body = http(base, "POST", path, obj)
+        return status, json.loads(body)
+
+    def count():
+        return len(db.recent_days(60)), sum(d["count"] for d in db.recent_days(60))
+
+    status, body = http(base, "GET", "/api/ai")
+    check("assistant is off without a key", status == 200 and json.loads(body) == {"enabled": False, "model": None, "vision": False}, body)
+    check("assistant calls answer 503 when off", post("/api/ai/food", {"text": "2 eggs"})[0] == 503
+          and post("/api/ai/chat", {"messages": [{"role": "user", "content": "hi"}]})[0] == 503)
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Fake)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    key = "sk-check-secret"
+    os.environ.update(KETO_LLM_API_KEY=key, KETO_LLM_MODEL="fake-model",
+                      KETO_LLM_BASE_URL=f"http://127.0.0.1:{httpd.server_address[1]}/v1")
+    try:
+        status, body = http(base, "GET", "/api/ai")
+        check("assistant status shows the model, never the key", json.loads(body) == {"enabled": True, "model": "fake-model", "vision": False}
+              and key not in body, body)
+
+        before = count()
+        heb = "גבינה צהובה"       # logged earlier in these checks
+        fake["reply"] = "Sure!\n```json\n" + json.dumps({"rows": [
+            {"item": heb, "quantity": "60 גרם", "net_carbs_g": "0,6", "calories": 210, "fat_g": 16.04, "protein_g": 15, "basis": "history"},
+            {"item": "olives", "quantity": "10", "net_carbs_g": 0.5, "calories": 45, "fat_g": 4.5, "protein_g": 0.3, "basis": "history"},
+            {"item": "", "net_carbs_g": 1},
+            {"item": "no carbs given"},
+            {"item": "nonsense", "net_carbs_g": -5},
+        ], "question": None}, ensure_ascii=False) + "\n```"
+        status, res = post("/api/ai/food", {"text": "60 גרם גבינה צהובה ו-10 זיתים"})
+        rows = res.get("rows", [])
+        check("food from words: fenced JSON read, rows cleaned, bad rows dropped", status == 200 and len(rows) == 2
+              and res["dropped"] == 3 and rows[0] == {"item": heb, "quantity": "60 גרם", "net_carbs_g": 0.6,
+                                                    "calories": 210.0, "fat_g": 16.0, "protein_g": 15.0, "basis": "history"}, res)
+        check("food from words: 'history' only for foods really in the log", rows[1]["basis"] == "estimate", rows)
+        sent = fake["seen"][-1]
+        check("request: bearer key, model, chat path, known foods and Hebrew in the prompt",
+              sent["auth"] == "Bearer " + key and sent["path"] == "/v1/chat/completions" and sent["body"]["model"] == "fake-model"
+              and heb in sent["body"]["messages"][0]["content"] and "זיתים" in sent["body"]["messages"][1]["content"], sent["path"])
+        check("food from words writes nothing", count() == before)
+
+        fake["reply"] = '{"rows": [], "question": "What did you eat?"}'
+        status, res = post("/api/ai/food", {"text": "something"})
+        check("food: a question instead of rows", status == 200 and res["rows"] == [] and res["question"] == "What did you eat?", res)
+        fake["reply"] = "I cannot help with that."
+        check("food: an answer without JSON is 502", post("/api/ai/food", {"text": "x"})[0] == 502)
+        check("food: empty request is 400", post("/api/ai/food", {"text": "  "})[0] == 400)
+        img = "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
+        status, res = post("/api/ai/food", {"image": img})
+        check("photo without a vision model is 503", status == 503, res)
+        os.environ["KETO_LLM_VISION_MODEL"] = "fake-vision"
+        fake["reply"] = '{"rows": [{"item": "bar", "quantity": "1 (40 g)", "net_carbs_g": 3, "calories": 190, "fat_g": 15, "protein_g": 8, "basis": "label"}]}'
+        status, res = post("/api/ai/food", {"image": img})
+        parts = fake["seen"][-1]["body"]["messages"][1]["content"]
+        check("photo goes to the vision model as an image part", status == 200 and res["rows"][0]["basis"] == "label"
+              and fake["seen"][-1]["body"]["model"] == "fake-vision" and parts[1]["image_url"]["url"] == img, res)
+        check("photo must be an image data URL", post("/api/ai/food", {"image": "https://example.com/x.jpg"})[0] == 400)
+
+        fake["reply"] = ("You have room for it. **Go ahead.**\nLOG: " + json.dumps({"rows": [
+            {"item": "avocado", "quantity": "100 g", "net_carbs_g": 1.8, "calories": 160, "fat_g": 15, "protein_g": 2}]}))
+        status, res = post("/api/ai/chat", {"messages": [{"role": "user", "content": "log half an avocado"}]})
+        check("coach: reply text and proposed rows, nothing written", status == 200 and res["reply"] == "You have room for it. Go ahead."
+              and res["rows"][0]["item"] == "avocado" and res["rows"][0]["basis"] == "estimate" and count() == before, res)
+        system = fake["seen"][-1]["body"]["messages"][0]["content"]
+        check("coach sees the log", "LOG DATA" in system and "net_carbs_goal_g" in system and "KNOWN FOODS" in system)
+        fake["reply"] = "Plain advice."
+        status, res = post("/api/ai/chat", {"messages": [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
+                                                         {"role": "user", "content": "c"}]})
+        check("coach: plain reply, thread passed on", status == 200 and res == {"reply": "Plain advice.", "rows": []}
+              and [m["role"] for m in fake["seen"][-1]["body"]["messages"]] == ["system", "user", "assistant", "user"], res)
+        check("coach: last message must be the user's",
+              post("/api/ai/chat", {"messages": [{"role": "assistant", "content": "b"}]})[0] == 400
+              and post("/api/ai/chat", {"messages": []})[0] == 400)
+
+        fake["reply"] = "Good period."
+        n = len(fake["seen"])
+        status, res = post("/api/ai/summary", {"days": "all"})
+        again = post("/api/ai/summary", {"days": "all"})[1]
+        check("review: text for the range, same numbers answered from cache", status == 200 and res["text"] == "Good period."
+              and res["model"] == "fake-model" and again == res and len(fake["seen"]) == n + 1, res)
+        check("review: refresh asks again", post("/api/ai/summary", {"days": "all", "refresh": True})[0] == 200
+              and len(fake["seen"]) == n + 2)
+        check("review: no full logged day is 400", post("/api/ai/summary", {"days": 3})[0] == 400)
+
+        fake["status"] = 429
+        status, res = post("/api/ai/chat", {"messages": [{"role": "user", "content": "hi"}]})
+        check("upstream error becomes 502 with a reason, no key", status == 502 and "rate limited" in res["error"]
+              and key not in json.dumps(res), res)
+        fake["status"] = 200
+        os.environ["KETO_LLM_BASE_URL"] = "http://example.com/v1"
+        check("plain http to another host is refused", post("/api/ai/chat", {"messages": [{"role": "user", "content": "hi"}]})[0] == 503)
+    finally:
+        for k in ("KETO_LLM_API_KEY", "KETO_LLM_BASE_URL", "KETO_LLM_MODEL", "KETO_LLM_VISION_MODEL"):
+            os.environ.pop(k, None)
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def check_body_migration():

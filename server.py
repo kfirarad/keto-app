@@ -8,12 +8,15 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import assistant
 import db
+import llm
 
 HOST = "127.0.0.1"
 PORT = 8787
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 MAX_BODY = 1024 * 1024
+MAX_PHOTO_BODY = 4 * 1024 * 1024     # /api/ai/food carries a downscaled photo
 
 STATIC_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -62,6 +65,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(409, {"error": str(e)})
         except db.ValidationError as e:
             self._json(400, {"error": str(e)})
+        except llm.LLMError as e:
+            self._json(e.status, {"error": str(e)})
         except Exception:
             traceback.print_exc(file=sys.stderr)
             self._json(500, {"error": "internal server error"})
@@ -103,6 +108,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, db.recent_foods() if top is None else db.frequent_foods(top))
         elif url.path == "/api/days":
             self._json(200, db.days_overview(qs.get("end", [None])[0], qs.get("n", [None])[0]))
+        elif url.path == "/api/ai":
+            self._json(200, llm.status())
         elif url.path == "/api/insights":
             self._json(200, db.insights(qs.get("days", [None])[0]))
         elif url.path == "/api/export.csv":
@@ -148,6 +155,12 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 raise db.ValidationError("body must be {text, dry_run}")
             self._json(200, db.import_sheet(payload.get("text"), bool(payload.get("dry_run"))))
+        elif path == "/api/ai/food":
+            self._json(200, assistant.parse_food(self._read_json(limit=MAX_PHOTO_BODY)))
+        elif path == "/api/ai/chat":
+            self._json(200, assistant.chat(self._read_json()))
+        elif path == "/api/ai/summary":
+            self._json(200, assistant.summary(self._read_json()))
         elif path in STATIC_FILES or path.startswith("/api/"):
             raise HTTPError(405, f"POST not allowed on {path}")
         else:
@@ -189,7 +202,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._not_allowed()
 
-    def _read_json(self, allow_empty=False):
+    def _read_json(self, allow_empty=False, limit=MAX_BODY):
         length_hdr = self.headers.get("Content-Length")
         if allow_empty and (length_hdr is None or length_hdr.strip() == "0"):
             return {}
@@ -200,7 +213,7 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", ""))
         except ValueError:
             raise HTTPError(411, "Content-Length required")
-        if length < 0 or length > MAX_BODY:
+        if length < 0 or length > limit:
             raise HTTPError(413, "request body too large")
         raw = self.rfile.read(length)
         try:

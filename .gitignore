@@ -4,3 +4,4 @@ data/keto.sqlite-shm
 __pycache__/
 .claude/scheduled_tasks.lock
 data/*.bak-*
+data/llm.json
