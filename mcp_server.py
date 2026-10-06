@@ -174,6 +174,32 @@ TOOLS = [
         },
     },
     {
+        "name": "add_note",
+        "description": "Log how the user feels at a date and time: symptoms (a list of short names "
+                       "such as Headache, Nausea, Tiredness) and/or free-text notes. "
+                       "Returns the note and that day's notes.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "DD/MM/YYYY. Default: today."},
+                "time": {"type": ["string", "null"], "description": "HH:MM, 24-hour."},
+                "symptoms": {"type": "array", "items": {"type": "string"}},
+                "notes": {"type": ["string", "null"]},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "delete_note",
+        "description": "Delete one note by id (ids are in get_day under notes).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"id": {"type": "integer"}},
+            "required": ["id"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "update_measurement",
         "description": "Change fields of one measurement by id; null clears a value.",
         "inputSchema": {
@@ -297,6 +323,12 @@ def call_tool(name, args):
         return {"fast": db.update_fast(args.get("id"), changes)}
     if name == "log_body":
         return db.log_body(args, source="mcp")
+    if name == "add_note":
+        row, notes = db.add_note(args, source="mcp")
+        return {"note": row, "notes": notes}
+    if name == "delete_note":
+        row, notes = db.delete_note(args.get("id"))
+        return {"deleted": row, "notes": notes}
     if name == "add_measurement":
         row, body = db.add_measurement(args, source="mcp")
         return {"measurement": row, "body": body}

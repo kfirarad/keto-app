@@ -133,6 +133,7 @@ def run_http_checks():
         run_fast_checks(base)
         run_goal_checks(base)
         run_body_checks(base)
+        run_note_checks(base)
         run_insights_checks(base)
 
         status, body = http(base, "GET", "/api/foods")
@@ -279,6 +280,38 @@ def run_goal_checks(base):
           len(o["days"]) == 7 and o["streak"]["current"] == 2, o["streak"])
     rec = json.loads(http(base, "GET", "/api/recent?n=60")[1])
     check("recent uses per-day goals", {r["date"]: r["goal"] for r in rec}.get("01/03/2026") == 30, rec)
+
+
+def run_note_checks(base):
+    def req(method, path, obj=None):
+        status, body = http(base, method, path, obj)
+        return status, json.loads(body)
+
+    d = "02/03/2026"
+    status, res = req("POST", "/api/notes", {"date": d, "time": "09:30", "symptoms": ["Headache", " headache ", "כאב בטן"],
+                                             "notes": "אחרי הקפה, mild"})
+    nid = res.get("note", {}).get("id")
+    check("add note: symptoms de-duplicated, Hebrew intact", status == 201 and res["note"]["symptoms"] == ["Headache", "כאב בטן"]
+          and res["note"]["notes"] == "אחרי הקפה, mild" and res["note"]["source"] == "ui" and len(res["notes"]) == 1, res)
+    status, res2 = req("POST", "/api/notes", {"date": d, "time": "08:00", "notes": "slept badly"})
+    check("a note without symptoms; day lists notes by time", status == 201 and [n["time"] for n in res2["notes"]] == ["08:00", "09:30"], res2)
+    check("reject an empty note", req("POST", "/api/notes", {"date": d, "symptoms": [], "notes": " "})[0] == 400
+          and req("POST", "/api/notes", {"date": d, "symptoms": "x" * 41})[0] == 400
+          and req("POST", "/api/notes", {"date": d, "symptoms": [1]})[0] == 400)
+    day = req("GET", f"/api/day?date={d}")[1]
+    check("day payload has notes and the symptom names used", len(day["notes"]) == 2 and day["symptom_names"] == ["Headache", "כאב בטן"], day["notes"])
+    status, res = req("PATCH", f"/api/notes/{nid}", {"symptoms": ["Nausea"], "notes": None})
+    check("update note", status == 200 and res["note"]["symptoms"] == ["Nausea"] and res["note"]["notes"] is None
+          and res["note"]["time"] == "09:30", res)
+    check("update cannot empty a note", req("PATCH", f"/api/notes/{nid}", {"symptoms": []})[0] == 400)
+    ins = req("GET", "/api/insights")[1]
+    row = next(x for x in ins["days"] if x["date"] == d)
+    check("insights: symptoms per day and days per symptom", row["symptoms"] == ["Nausea"]
+          and ins["summary"]["symptoms"] == [{"name": "Nausea", "days": 1, "last_date": d}], ins["summary"]["symptoms"])
+    status, body = http(base, "GET", "/api/export.csv?table=notes")
+    check("CSV export of notes", status == 200 and "02/03/2026" in body and "Nausea" in body and "slept badly" in body, body[:200])
+    status, res = req("DELETE", f"/api/notes/{res2['note']['id']}")
+    check("delete note", status == 200 and len(res["notes"]) == 1 and req("DELETE", "/api/notes/99999")[0] == 404, res)
 
 
 def run_insights_checks(base):
@@ -620,8 +653,8 @@ def run_mcp_checks():
         send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         r = recv()
         names = sorted(t["name"] for t in r.get("result", {}).get("tools", []))
-        check("MCP tools/list", names == ["add_entries", "add_measurement", "delete_entry", "delete_fast",
-                                          "delete_measurement", "get_day", "log_body", "recent_days",
+        check("MCP tools/list", names == ["add_entries", "add_measurement", "add_note", "delete_entry", "delete_fast",
+                                          "delete_measurement", "delete_note", "get_day", "log_body", "recent_days",
                                           "set_goal", "start_fast", "stop_fast", "update_entry",
                                           "update_fast", "update_measurement"], r)
 
@@ -674,6 +707,11 @@ def run_mcp_checks():
         check("MCP update_measurement", err is False and out["measurement"]["pulse"] == 61, out)
         err, out = call(15, "delete_measurement", {"id": mid})
         check("MCP delete_measurement", err is False and out["body"]["bp_sys"] is None, out)
+        err, out = call(16, "add_note", {"date": "05/03/2026", "symptoms": ["Tiredness"], "notes": "עייף"})
+        check("MCP add_note", err is False and out["note"]["source"] == "mcp" and out["note"]["notes"] == "עייף"
+              and db.get_day("05/03/2026")["notes"][0]["symptoms"] == ["Tiredness"], out)
+        err, out = call(17, "delete_note", {"id": out["note"]["id"]})
+        check("MCP delete_note", err is False and out["notes"] == [], out)
         err, out = call(9, "delete_entry", {"id": eid})
         check("MCP delete_entry", err is False and out["day"]["count"] == 0, out)
         err, out = call(10, "delete_entry", {"id": eid})

@@ -479,3 +479,12 @@ body:not([data-view="insights"]) #insights, body:not([data-view="coach"]) #coach
 .coach-bar .btn { min-height: 48px; }
 .review { white-space: pre-wrap; }
 .ins-sec[data-ins="review"] .hint { margin-top: var(--s-1); }
+
+/* ---------- notes and symptoms ---------- */
+.more [data-sec=notes] .eyebrow { color: var(--body); }
+.sym { display: inline-block; margin: 2px var(--s-1) 2px 0; padding: 2px var(--s-2); border-radius: var(--r-pill); background: var(--body-tint); color: var(--body); font-size: var(--t-xs); font-weight: 600; }
+.notes .mv small { white-space: pre-wrap; overflow-wrap: anywhere; }
+.syms { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.syms .chip { background: var(--hl); }
+.syms .chip[aria-pressed="true"] { background: var(--body); color: var(--bg); font-weight: 600; }
+.meter.body > i { background: var(--body); }

@@ -138,6 +138,7 @@ def _log_data(days):
             "measurements": [{k: v for k, v in m.items() if v is not None and k in ("time",) + tuple(db.MEASURE_FIELDS)}
                              for m in day["body"]["measurements"]],
             "water_ml": day["body"]["water_ml"],
+            "symptoms_and_notes": [{k: n[k] for k in ("time", "symptoms", "notes") if n[k]} for n in day["notes"]],
         },
         "period": {"from": ins["from"], "to": ins["to"], "summary": ins["summary"],
                    "days": [{k: v for k, v in d.items() if v is not None and k != "count"}

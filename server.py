@@ -28,6 +28,7 @@ STATIC_FILES = {
 ENTRY_PATH = re.compile(r"^/api/entries/(\d+)$")
 FAST_PATH = re.compile(r"^/api/fasts/(\d+)$")
 MEASURE_PATH = re.compile(r"^/api/measurements/(\d+)$")
+NOTE_PATH = re.compile(r"^/api/notes/(\d+)$")
 
 
 class HTTPError(Exception):
@@ -150,6 +151,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/measurements":
             row, body = db.add_measurement(self._read_json(), source="ui")
             self._json(201, {"measurement": row, "body": body})
+        elif path == "/api/notes":
+            row, notes = db.add_note(self._read_json(), source="ui")
+            self._json(201, {"note": row, "notes": notes})
         elif path == "/api/import":
             payload = self._read_json()
             if not isinstance(payload, dict):
@@ -182,6 +186,11 @@ class Handler(BaseHTTPRequestHandler):
             row, body = db.update_measurement(int(m.group(1)), self._read_json())
             self._json(200, {"measurement": row, "body": body})
             return
+        m = NOTE_PATH.match(path)
+        if m:
+            row, notes = db.update_note(int(m.group(1)), self._read_json())
+            self._json(200, {"note": row, "notes": notes})
+            return
         self._not_allowed()
 
     def _delete(self):
@@ -199,6 +208,11 @@ class Handler(BaseHTTPRequestHandler):
         if m:
             row, body = db.delete_measurement(int(m.group(1)))
             self._json(200, {"deleted": row, "body": body})
+            return
+        m = NOTE_PATH.match(path)
+        if m:
+            row, notes = db.delete_note(int(m.group(1)))
+            self._json(200, {"deleted": row, "notes": notes})
             return
         self._not_allowed()
 

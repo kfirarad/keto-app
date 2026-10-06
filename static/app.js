@@ -111,7 +111,7 @@ const S = {
   seq: 0,
   ui: { sheet: null, expanded: null, editingId: null, goalEdit: false, fastEditId: null, toast: null,
         copyIds: [], copyTarget: null, error: "", busy: false,
-        open: { week: false, fast: false, body: false, form: false } },
+        open: { week: false, fast: false, body: false, notes: false, form: false } },
   form: blankForm(),
 };
 const day = () => S.day || EMPTY_DAY;
@@ -186,7 +186,7 @@ function render() {
   paint("glance", renderGlance(d));
   paint("quick", renderQuickLog());
   paint("log", renderEntries(d));
-  paint("more", renderWeek() + renderFasting(d) + renderBody(d));
+  paint("more", renderWeek() + renderFasting(d) + renderBody(d) + renderNotes(d));
   paint("pinbar", renderPinbar(d));
   paint("sheet", renderSheet(d));
   paint("toast", renderToast());
@@ -519,6 +519,74 @@ function renderBody(d) {
     </details>`;
 }
 
+/* ---------- notes and symptoms ---------- */
+const SYMPTOMS = ["Headache", "Nausea", "Tiredness", "Dizziness", "Cramps", "Brain fog", "Hunger", "Cravings", "Constipation", "Poor sleep", "Heart racing"];
+const sameName = (a, b) => a.toLowerCase() === b.toLowerCase();
+// Usual symptoms first, then any other names used before or picked now.
+function symptomChoices(picked) {
+  const out = SYMPTOMS.slice();
+  for (const n of [...(day().symptom_names || []), ...picked]) if (!out.some(x => sameName(x, n))) out.push(n);
+  return out;
+}
+const symptomTags = list => list.map(n => `<span class="sym">${ut(n)}</span>`).join("");
+
+function renderNotes(d) {
+  const notes = d.notes || [];
+  const names = [];
+  for (const n of notes) for (const x of n.symptoms) if (!names.some(y => sameName(x, y))) names.push(x);
+  const texts = notes.filter(n => n.notes).length;
+  const sum = [names.map(esc).join(", "), texts && `${texts} ${texts === 1 ? "note" : "notes"}`].filter(Boolean).join(" · ") || "nothing noted";
+  const list = notes.map(n => `<li>
+      <span class="t num">${n.time || `<span class="none">–</span>`}</span>
+      <span class="mv">${symptomTags(n.symptoms)}${n.notes ? `<small dir="auto">${esc(n.notes)}</small>` : ""}</span>
+      <button type="button" class="btn" data-act="note-edit" data-id="${n.id}">Edit</button>
+      <button type="button" class="btn btn-danger" data-act="note-delete" data-id="${n.id}">Delete</button></li>`).join("");
+  return `
+    <details data-sec="notes"${S.ui.open.notes ? " open" : ""}>
+      <summary><span class="eyebrow">Notes</span><span class="sum">${sum}</span></summary>
+      <div class="panel">
+        ${list ? `<ul class="measures notes">${list}</ul>` : `<p class="muted">No symptoms or notes this day.</p>`}
+        <div class="row-btns"><button type="button" class="btn btn-primary" data-act="note-add">Add symptoms or a note</button></div>
+      </div>
+    </details>`;
+}
+
+function renderNoteForm() {
+  const n = S.note, editing = n.id != null;
+  const chips = symptomChoices(n.symptoms).map(x =>
+    `<button type="button" class="chip" data-act="note-sym" data-name="${esc(x)}" aria-pressed="${n.symptoms.some(y => sameName(x, y))}">${ut(x)}</button>`).join("");
+  return `
+    <div class="sheet-h"><h2 id="sheet-title">${editing ? "Edit note" : "How do you feel?"}</h2><button type="button" class="icon-btn" data-act="close-sheet" aria-label="Close">&times;</button></div>
+    <form class="form" data-form="note" autocomplete="off" novalidate>
+      <div class="grid2">
+        <label class="field">Date<input type="date" name="date" value="${dmyToIso(n.date)}" max="${dmyToIso(today())}" required></label>
+        <label class="field">Time<input type="time" name="time" value="${esc(n.time || "")}"></label>
+      </div>
+      <div class="syms" role="group" aria-label="Symptoms">${chips}</div>
+      <label class="field">Another symptom<input name="other" dir="auto" maxlength="40" enterkeyhint="done" placeholder="Separate several with commas" value="${esc(n.other)}"></label>
+      <label class="field">Note<textarea name="notes" dir="auto" rows="3" maxlength="2000">${esc(n.notes || "")}</textarea></label>
+      <p class="error" id="form-error" role="alert">${esc(S.ui.error)}</p>
+      <div class="sheet-actions">
+        <button type="button" class="btn" data-act="close-sheet">Cancel</button>
+        <button class="btn btn-primary"${S.ui.busy ? " disabled" : ""}>${editing ? "Save" : "Add"}</button>
+      </div>
+    </form>`;
+}
+function openNote(n) {
+  S.note = n ? { id: n.id, date: n.date, time: n.time, symptoms: n.symptoms.slice(), notes: n.notes || "", other: "" }
+    : { id: null, date: S.date, time: S.date === today() ? hm(now()) : "", symptoms: [], notes: "", other: "" };
+  S.ui.sheet = "note"; S.ui.error = ""; S.ui.busy = false;
+  render();
+}
+function noteText(n) { return [n.symptoms.join(", "), n.notes && (n.symptoms.length ? "note" : "Note")].filter(Boolean).join(" · "); }
+function deleteNote(id) {
+  api(`/api/notes/${id}`, { method: "DELETE" }).then(res => {
+    const x = res.deleted;
+    toast(["Deleted ", { u: noteText(x) }], () => send("POST", "/api/notes", { date: x.date, time: x.time, symptoms: x.symptoms, notes: x.notes }));
+    return load();
+  }).catch(fail);
+}
+
 function renderPinbar(d) {
   if (S.ui.sheet) return "";
   const c = d.totals.net_carbs_g || 0, over = d.over_goal;
@@ -531,7 +599,7 @@ function renderPinbar(d) {
 function renderSheet(d) {
   if (!S.ui.sheet) return "";
   const inner = S.ui.sheet === "copy" ? renderCopyPanel(d) : S.ui.sheet === "measure" ? renderMeasureForm(d)
-    : S.ui.sheet === "import" ? renderImport() : S.ui.sheet === "ai" ? renderAiReview() : renderAddForm(d);
+    : S.ui.sheet === "note" ? renderNoteForm() : S.ui.sheet === "import" ? renderImport() : S.ui.sheet === "ai" ? renderAiReview() : renderAddForm(d);
   return `<div class="scrim" data-act="close-sheet"></div>
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title"><div class="grab" aria-hidden="true"></div>${inner}</div>`;
 }
@@ -822,11 +890,11 @@ function renderInsights() {
   const s = r.summary, days = r.days, av = s.average, n = s.logged_days;
   const span = days.length;
   const sub = `<p class="ins-sub num">${dm(r.from)} – ${dm(r.to)} · ${span} ${span === 1 ? "day" : "days"}${n ? ` · averages over ${n} full ${n === 1 ? "day" : "days"}, today left out` : ""}</p>`;
-  if (!days.some(d => d.count) && !Object.values(s.measurements).some(Boolean)) {
+  if (!days.some(d => d.count) && !Object.values(s.measurements).some(Boolean) && !s.symptoms.length) {
     return head + sub + `<p class="empty">Nothing logged in this range yet.</p>`;
   }
   return head + sub + (I.err ? `<p class="error">${esc(I.err)}</p>` : "")
-    + renderInsStats(r) + renderInsReview(r) + renderInsCarbs(r) + renderInsEnergy(r) + renderInsFasting(r) + renderInsBody(r) + renderInsFoods(r);
+    + renderInsStats(r) + renderInsReview(r) + renderInsCarbs(r) + renderInsEnergy(r) + renderInsFasting(r) + renderInsBody(r) + renderInsSymptoms(r) + renderInsFoods(r);
 }
 
 function renderInsStats(r) {
@@ -914,6 +982,19 @@ function renderInsBody(r) {
     + bp
     + one("pulse", "Pulse, bpm", st.pulse, "", d => d.pulse);
   return out || insSection("body", "Body", "", `<p class="empty">No measurements in this range. Add them from the Day tab.</p>`);
+}
+
+function renderInsSymptoms(r) {
+  const list = r.summary.symptoms;
+  if (!list.length) return "";
+  const top = list[0].days;
+  const rows = list.map(x => `<li>
+      <span class="it">${ut(x.name)}</span>
+      <span class="num">${x.days} ${x.days === 1 ? "day" : "days"}</span>
+      <span class="meter thin body" aria-hidden="true"><i style="width:${x.days / top * 100}%"></i></span>
+      <small class="num">last on ${dm(x.last_date)}</small></li>`).join("");
+  const days = r.days.filter(d => d.symptoms.length).length;
+  return insSection("symptoms", "Symptoms", `on ${days} of ${r.days.length} days`, `<ol class="tops">${rows}</ol>`);
 }
 
 function renderInsFoods(r) {
@@ -1373,6 +1454,15 @@ document.addEventListener("click", ev => {
   const act = el.dataset.act, id = +el.dataset.id, d = day();
   switch (act) {
     case "view": if (el.dataset.view !== S.view) setView(el.dataset.view); return;
+    case "note-add": openNote(); return;
+    case "note-edit": { const n = (d.notes || []).find(x => x.id === id); if (n) openNote(n); return; }
+    case "note-delete": deleteNote(id); return;
+    case "note-sym": {
+      const n = S.note, name = el.dataset.name, i = n.symptoms.findIndex(x => sameName(x, name));
+      if (i >= 0) n.symptoms.splice(i, 1); else n.symptoms.push(name);
+      el.setAttribute("aria-pressed", String(i < 0));
+      return;
+    }
     case "ai-fill": aiFill(); return;
     case "ai-back":
       if (S.aiFood.from === "add") { S.ui.sheet = "add"; S.ui.error = ""; S.ui.busy = false; } else closeSheet();
@@ -1426,7 +1516,7 @@ document.addEventListener("click", ev => {
       S.gluUnit = u; saveGluUnit(u);
       document.getElementById("glu-unit").textContent = gluUnitLabel(u);
       el.form.querySelectorAll("[data-act=glu-unit]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.u === u)));
-      paint("more", renderWeek() + renderFasting(d) + renderBody(d));
+      paint("more", renderWeek() + renderFasting(d) + renderBody(d) + renderNotes(d));
       return;
     }
     case "measure-edit": { const m = (d.body?.measurements || []).find(x => x.id === id); if (m) openMeasure(m); return; }
@@ -1473,6 +1563,10 @@ document.addEventListener("input", ev => {
   }
   if (form === "import") { S.imp.text = t.value; previewImport(); return; }
   if (t.name === "ai_text") { S.aiFood.text = t.value; return; }
+  if (form === "note") {
+    if (t.name === "date") S.note.date = t.value ? isoToDmy(t.value) : S.note.date; else if (t.name in S.note) S.note[t.name] = t.value;
+    return;
+  }
   if (form === "coach") { S.coach.draft = t.value; return; }
   if (form === "ai-save") {
     const a = S.aiFood, m = /^(on|item|quantity|net_carbs_g|calories|fat_g|protein_g)_(\d+)$/.exec(t.name);
@@ -1584,6 +1678,21 @@ document.addEventListener("submit", ev => {
       closeSheet(); S.ui.open.body = true;
       toast(`${editing ? "Saved" : "Added"} ${measureText(saved)}${saved.date !== S.date ? ` to ${saved.date.slice(0, 5)}` : ""}`,
         editing ? null : () => api(`/api/measurements/${saved.id}`, { method: "DELETE" }));
+      if (saved.date !== S.date) goTo(saved.date); else load();
+    }).catch(e => { S.ui.busy = false; S.ui.error = e.message; render(); });
+    return;
+  }
+  if (kind === "note") {
+    const n = S.note, symptoms = n.symptoms.slice();
+    for (const x of n.other.split(",").map(x => x.trim()).filter(Boolean)) if (!symptoms.some(y => sameName(x, y))) symptoms.push(x);
+    if (!symptoms.length && !n.notes.trim()) { S.ui.error = "Pick a symptom or write a note."; document.getElementById("form-error").textContent = S.ui.error; return; }
+    const payload = { date: n.date, time: n.time || null, symptoms, notes: n.notes.trim() ? n.notes : null }, editing = n.id != null;
+    S.ui.error = ""; S.ui.busy = true;
+    (editing ? send("PATCH", `/api/notes/${n.id}`, payload) : send("POST", "/api/notes", payload)).then(res => {
+      const saved = res.note;
+      closeSheet(); S.ui.open.notes = true;
+      toast([editing ? "Saved " : "Added ", { u: noteText(saved) }, saved.date !== S.date ? ` to ${saved.date.slice(0, 5)}` : ""],
+        editing ? null : () => api(`/api/notes/${saved.id}`, { method: "DELETE" }));
       if (saved.date !== S.date) goTo(saved.date); else load();
     }).catch(e => { S.ui.busy = false; S.ui.error = e.message; render(); });
     return;

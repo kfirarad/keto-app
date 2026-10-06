@@ -4,6 +4,7 @@ Used by both server.py (web) and mcp_server.py (stdio MCP). Both processes
 may write at the same time, so every connection uses WAL and a busy timeout.
 """
 
+import json
 import math
 import os
 import re
@@ -92,6 +93,18 @@ CREATE TABLE IF NOT EXISTS measurements (
     CHECK ((bp_sys IS NULL) = (bp_dia IS NULL))
 );
 CREATE INDEX IF NOT EXISTS measurements_date_idx ON measurements (m_date);
+
+-- How the day felt: symptoms (JSON array of names) and/or a free note.
+CREATE TABLE IF NOT EXISTS day_notes (
+    id         INTEGER PRIMARY KEY,
+    n_date     TEXT NOT NULL,
+    n_time     TEXT,
+    symptoms   TEXT NOT NULL DEFAULT '[]',
+    notes      TEXT,
+    source     TEXT NOT NULL CHECK (source IN ('ui', 'mcp')),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS day_notes_date_idx ON day_notes (n_date);
 
 -- A day's net-carb goal is the latest row on or before that day, else GOAL_NET_CARBS.
 CREATE TABLE IF NOT EXISTS day_goals (
@@ -420,6 +433,8 @@ def _day(conn, iso):
     active = _active_fast_row(conn)
     out["active_fast"] = _fast_out(active) if active else None
     out["body"] = _body(conn, iso)
+    out["notes"] = _notes(conn, iso)
+    out["symptom_names"] = _symptom_names(conn)
     out["first_date"] = format_date(_first_iso(conn))
     return out
 
@@ -431,7 +446,8 @@ def _first_iso(conn):
         "SELECT MIN(d) FROM (SELECT MIN(entry_date) AS d FROM entries"
         " UNION ALL SELECT MIN(start_date) FROM fasts"
         " UNION ALL SELECT MIN(log_date) FROM body_log"
-        " UNION ALL SELECT MIN(m_date) FROM measurements)").fetchone()[0]
+        " UNION ALL SELECT MIN(m_date) FROM measurements"
+        " UNION ALL SELECT MIN(n_date) FROM day_notes)").fetchone()[0]
     return min(first or today_iso(), today_iso())
 
 
@@ -1182,6 +1198,121 @@ def import_sheet(text, dry_run=False):
     return result
 
 
+# ---- notes and symptoms --------------------------------------------------
+
+NOTE_INPUT = ("date", "time", "symptoms", "notes")
+SYMPTOMS_MAX = 12
+SYMPTOM_LEN = 40
+NOTE_LEN = 2000
+_N_ORDER = "ORDER BY n_date, n_time IS NULL, n_time, id"
+
+
+def validate_note(obj):
+    """One note -> DB column values. Needs a symptom or some text."""
+    _check_fields(obj, NOTE_INPUT, "note")
+    symptoms = obj.get("symptoms")
+    if symptoms is None:
+        symptoms = []
+    if isinstance(symptoms, str):
+        symptoms = symptoms.split(",")
+    if not isinstance(symptoms, list) or not all(isinstance(x, str) for x in symptoms):
+        raise ValidationError("symptoms must be a list of names")
+    names = []
+    for x in symptoms:
+        x = " ".join(x.split())
+        if x and x.casefold() not in [n.casefold() for n in names]:
+            names.append(x)
+    if len(names) > SYMPTOMS_MAX or any(len(n) > SYMPTOM_LEN for n in names):
+        raise ValidationError(f"at most {SYMPTOMS_MAX} symptoms of up to {SYMPTOM_LEN} characters")
+    notes = _text(obj.get("notes"), "notes")
+    if notes is not None and len(notes) > NOTE_LEN:
+        raise ValidationError(f"notes must be at most {NOTE_LEN} characters")
+    if not names and notes is None:
+        raise ValidationError("give at least one symptom or a note")
+    return {"n_date": parse_date(obj.get("date")), "n_time": parse_time(obj.get("time")),
+            "symptoms": json.dumps(names, ensure_ascii=False), "notes": notes}
+
+
+def _note_out(r):
+    return {"id": r["id"], "date": format_date(r["n_date"]), "time": r["n_time"],
+            "symptoms": json.loads(r["symptoms"]), "notes": r["notes"],
+            "source": r["source"], "created_at": r["created_at"]}
+
+
+def _notes(conn, iso):
+    return [_note_out(r) for r in conn.execute(
+        f"SELECT * FROM day_notes WHERE n_date = ? {_N_ORDER}", (iso,))]
+
+
+def _symptom_names(conn):
+    """Symptom names used so far, most used first."""
+    count = {}
+    for (raw,) in conn.execute("SELECT symptoms FROM day_notes"):
+        for name in json.loads(raw):
+            count[name] = count.get(name, 0) + 1
+    return sorted(count, key=lambda n: (-count[n], n))
+
+
+def _get_note(conn, nid):
+    r = conn.execute("SELECT * FROM day_notes WHERE id = ?", (nid,)).fetchone()
+    if r is None:
+        raise NotFoundError(f"note {nid} not found")
+    return r
+
+
+def add_note(payload, source):
+    """Insert one note. Returns (row, that day's notes)."""
+    if source not in ("ui", "mcp"):
+        raise ValueError("bad source")
+    row = validate_note(payload)
+    conn = connect()
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO day_notes (n_date, n_time, symptoms, notes, source, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (*row.values(), source, datetime.now(TZ).isoformat(timespec="seconds")))
+        return _note_out(_get_note(conn, cur.lastrowid)), _notes(conn, row["n_date"])
+    finally:
+        conn.close()
+
+
+def update_note(note_id, changes):
+    """Change some fields of a note. Returns (row, notes of its new day)."""
+    nid = _id(note_id, "note")
+    if not isinstance(changes, dict):
+        raise ValidationError("changes must be a JSON object")
+    changes = {k: v for k, v in changes.items() if k not in ("id", "source", "created_at")}
+    _check_fields(changes, NOTE_INPUT, "changes")
+    if not changes:
+        raise ValidationError("no fields to change")
+    conn = connect()
+    try:
+        with conn:
+            old = _note_out(_get_note(conn, nid))
+            merged = {k: old[k] for k in NOTE_INPUT}
+            merged.update(changes)
+            r = validate_note(merged)
+            sets = ", ".join(f"{c} = ?" for c in r)
+            conn.execute(f"UPDATE day_notes SET {sets} WHERE id = ?", (*r.values(), nid))
+        return _note_out(_get_note(conn, nid)), _notes(conn, r["n_date"])
+    finally:
+        conn.close()
+
+
+def delete_note(note_id):
+    """Delete one note. Returns (deleted row, notes of its day)."""
+    nid = _id(note_id, "note")
+    conn = connect()
+    try:
+        with conn:
+            old = _get_note(conn, nid)
+            conn.execute("DELETE FROM day_notes WHERE id = ?", (nid,))
+        return _note_out(old), _notes(conn, old["n_date"])
+    finally:
+        conn.close()
+
+
 # ---- insights ------------------------------------------------------------
 
 INSIGHTS_MAX_DAYS = 3660
@@ -1270,6 +1401,10 @@ def insights(days=None):
                     vals[f] = _clean_num(r[f])
         water = dict(conn.execute(
             "SELECT log_date, water_ml FROM body_log WHERE log_date BETWEEN ? AND ?", rng).fetchall())
+        felt = {}
+        for r in conn.execute(f"SELECT * FROM day_notes WHERE n_date BETWEEN ? AND ? {_N_ORDER}", rng):
+            names = felt.setdefault(r["n_date"], [])
+            names.extend(x for x in json.loads(r["symptoms"]) if x not in names)
         tops = conn.execute(
             "SELECT item, COUNT(*) AS times, SUM(net_carbs_g) AS net, SUM(calories) AS calories"
             " FROM entries WHERE entry_date BETWEEN ? AND ? GROUP BY item"
@@ -1305,6 +1440,7 @@ def insights(days=None):
             **{f: m.get(f) for f in MEASURE_FIELDS},
             "gki": gki,
             "water_ml": water.get(iso),
+            "symptoms": felt.get(iso, []),
         })
 
     done = [d for d in out if d["count"] and d["date"] != format_date(today)]
@@ -1315,7 +1451,13 @@ def insights(days=None):
     fasts = [d["fast_hours"] for d in out if d["fast_hours"]]
     windows = [d for d in done if d["first_time"] and d["last_time"]]
     mins = lambda t: int(t[:2]) * 60 + int(t[3:5])
+    symptom_days = {}
+    for d in out:
+        for name in d["symptoms"]:
+            symptom_days.setdefault(name, []).append(d["date"])
     summary = {
+        "symptoms": [{"name": k, "days": len(v), "last_date": v[-1]}
+                     for k, v in sorted(symptom_days.items(), key=lambda kv: (-len(kv[1]), kv[0]))],
         "logged_days": len(done),
         "within_goal_days": sum(1 for d in done if not d["over_goal"]),
         "average": {f: _avg([d[f] for d in done if d[f] is not None])
@@ -1356,6 +1498,7 @@ EXPORT_TABLES = {
     "fasts": ("SELECT * FROM fasts ORDER BY start_date, start_time, id", ("start_date", "end_date")),
     "measurements": ("SELECT * FROM measurements " + _M_ORDER, ("m_date",)),
     "body": ("SELECT log_date, water_ml, updated_at FROM body_log ORDER BY log_date", ("log_date",)),
+    "notes": ("SELECT * FROM day_notes " + _N_ORDER, ("n_date",)),
 }
 
 
