@@ -46,7 +46,8 @@ COACH_SYSTEM = f"""You are a keto coach inside the user's personal food log. You
 - Answer in the language of the user's last message. Plain text only, no markdown, no tables.
 - Dates are DD/MM/YYYY. Net carbs are what counts against the daily goal.
 - Keep the whole reply under 150 words.
-- You cannot change the log, so never say that you added or logged something. When the user asks you to log food, or accepts food you suggested, say the rows are ready to review and finish your reply with a line that starts with LOG: followed by one JSON object {{"rows": [row, ...]}}; the app shows those rows for the user to review and save. Do not add LOG: otherwise.
+- You cannot change the log, so never say that you added or logged something. When the user asks you to log food, a workout, a symptom or a note, or accepts something you suggested, say it is ready to approve and finish your reply with a line that starts with LOG: followed by one JSON object {{"rows": [row, ...], "notes": [note, ...]}} (leave out the list you do not need); the app shows it for the user to approve. Do not add LOG: otherwise.
+- Note format: {{"date": "DD/MM/YYYY", "time": "HH:MM", "workout": "Run", "minutes": 32, "symptoms": ["Headache"], "notes": "free text"}}. Every field is optional but a note needs a workout, a symptom or text. A workout is one short kind (Run, Walk, Gym, Bike, Swim, Yoga, ...) with minutes when known; put distance, pace and other details in notes. Symptoms are short names. Leave out date and time for now; use them when the user says when it happened.
 {ROW_RULES}
 - You are not a doctor. For worrying blood pressure, glucose or symptoms, say so briefly and point to a doctor."""
 
@@ -95,6 +96,25 @@ def _clean_rows(rows, known=None):
     return out, dropped
 
 
+def _clean_notes(notes):
+    """Keep proposed notes / workouts that would be accepted; dates and times filled in."""
+    out = []
+    for n in notes if isinstance(notes, list) else []:
+        if len(out) >= 10:
+            break
+        try:
+            r = db.validate_note({k: n[k] for k in db.NOTE_INPUT if n.get(k) not in (None, "", [])})
+        except (db.ValidationError, TypeError, AttributeError):
+            continue
+        if r["n_date"] > db.today_iso():
+            continue
+        out.append({"date": db.format_date(r["n_date"]),
+                    "time": r["n_time"] or (db.now_hhmm() if r["n_date"] == db.today_iso() else None),
+                    "workout": r["workout"], "minutes": None if r["minutes"] is None else db._clean_num(r["minutes"]),
+                    "symptoms": json.loads(r["symptoms"]), "notes": r["notes"]})
+    return out
+
+
 def parse_food(payload):
     """Words and/or a photo -> rows to review. Writes nothing."""
     if not isinstance(payload, dict):
@@ -139,7 +159,8 @@ def _log_data(days):
             "measurements": [{k: v for k, v in m.items() if v is not None and k in ("time",) + tuple(db.MEASURE_FIELDS)}
                              for m in day["body"]["measurements"]],
             "water_ml": day["body"]["water_ml"],
-            "symptoms_and_notes": [{k: n[k] for k in ("time", "symptoms", "notes") if n[k]} for n in day["notes"]],
+            "workouts_symptoms_notes": [{k: n[k] for k in ("time", "workout", "minutes", "symptoms", "notes") if n[k]}
+                                        for n in day["notes"]],
         },
         "period": {"from": ins["from"], "to": ins["to"], "summary": ins["summary"],
                    "days": [{k: v for k, v in d.items() if v is not None and k != "count"}
@@ -182,15 +203,16 @@ def chat(payload):
     except llm.LLMError as e:
         e.data = {"chat": saved}
         raise
-    rows = []
+    rows, notes = [], []
     parts = _LOG_RE.split(reply)
     if len(parts) > 1:
         obj = llm.extract_json(parts[-1])
         if obj is not None:
             rows, _ = _clean_rows(obj.get("rows"))
+            notes = _clean_notes(obj.get("notes"))
             reply = "LOG:".join(parts[:-1]).strip()
     reply = reply.replace("**", "").strip()
-    return {"chat": db.add_chat_message(saved["id"], "assistant", reply or "Here are the rows to review.", rows)}
+    return {"chat": db.add_chat_message(saved["id"], "assistant", reply or "Ready for you to approve.", rows, notes)}
 
 
 _summaries = {}     # (days, data hash) -> result; the same numbers give the same review

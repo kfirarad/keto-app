@@ -499,3 +499,14 @@ body:not([data-view="insights"]) #insights, body:not([data-view="coach"]) #coach
 .chats button:hover { background: var(--hl); }
 .chats .it { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .chats small { font-size: var(--t-xs); color: var(--muted-ink); }
+
+/* ---------- workouts, proposal outcomes ---------- */
+.sym.wk { background: var(--fast-tint); color: var(--fast); }
+.syms.wk .chip[aria-pressed="true"] { background: var(--fast); color: var(--bg); }
+.msg .row-btns { margin-top: var(--s-2); }
+.outcome { margin-top: var(--s-2) !important; font-size: var(--t-sm); font-weight: 600; }
+.outcome.added { color: var(--accent); }
+.outcome.added::before { content: "\2713\00a0"; }
+.outcome.declined { color: var(--muted-ink); font-weight: 400; }
+.outcome .link { min-height: 0; font-weight: 400; }
+.msg-rows .it small { white-space: normal; }

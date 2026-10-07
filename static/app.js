@@ -528,43 +528,66 @@ function symptomChoices(picked) {
   for (const n of [...(day().symptom_names || []), ...picked]) if (!out.some(x => sameName(x, n))) out.push(n);
   return out;
 }
-const symptomTags = list => list.map(n => `<span class="sym">${ut(n)}</span>`).join("");
+const WORKOUTS = ["Run", "Walk", "Gym", "Bike", "Swim", "Yoga", "Hike"];
+function workoutChoices(picked) {
+  const out = WORKOUTS.slice();
+  for (const n of [...(day().workout_names || []), picked || ""]) if (n && !out.some(x => sameName(x, n))) out.push(n);
+  return out;
+}
+const workoutText = n => n.workout ? `${n.workout}${n.minutes != null ? ` · ${g(n.minutes)} min` : ""}` : "";
+const noteTags = n => (n.workout ? `<span class="sym wk">${ut(n.workout)}${n.minutes != null ? ` · <span class="num">${g(n.minutes)} min</span>` : ""}</span>` : "")
+  + n.symptoms.map(x => `<span class="sym">${ut(x)}</span>`).join("");
 
 function renderNotes(d) {
   const notes = d.notes || [];
   const names = [];
   for (const n of notes) for (const x of n.symptoms) if (!names.some(y => sameName(x, y))) names.push(x);
-  const texts = notes.filter(n => n.notes).length;
-  const sum = [names.map(esc).join(", "), texts && `${texts} ${texts === 1 ? "note" : "notes"}`].filter(Boolean).join(" · ") || "nothing noted";
+  const texts = notes.filter(n => n.notes && !n.workout).length;
+  const sum = [notes.filter(n => n.workout).map(n => esc(workoutText(n))).join(", "), names.map(esc).join(", "),
+    texts && `${texts} ${texts === 1 ? "note" : "notes"}`].filter(Boolean).join(" · ") || "nothing noted";
   const list = notes.map(n => `<li>
       <span class="t num">${n.time || `<span class="none">–</span>`}</span>
-      <span class="mv">${symptomTags(n.symptoms)}${n.notes ? `<small dir="auto">${esc(n.notes)}</small>` : ""}</span>
+      <span class="mv">${noteTags(n)}${n.notes ? `<small dir="auto">${esc(n.notes)}</small>` : ""}</span>
       <button type="button" class="btn" data-act="note-edit" data-id="${n.id}">Edit</button>
       <button type="button" class="btn btn-danger" data-act="note-delete" data-id="${n.id}">Delete</button></li>`).join("");
   return `
     <details data-sec="notes"${S.ui.open.notes ? " open" : ""}>
       <summary><span class="eyebrow">Notes</span><span class="sum">${sum}</span></summary>
       <div class="panel">
-        ${list ? `<ul class="measures notes">${list}</ul>` : `<p class="muted">No symptoms or notes this day.</p>`}
-        <div class="row-btns"><button type="button" class="btn btn-primary" data-act="note-add">Add symptoms or a note</button></div>
+        ${list ? `<ul class="measures notes">${list}</ul>` : `<p class="muted">No workouts, symptoms or notes this day.</p>`}
+        <div class="row-btns">
+          <button type="button" class="btn btn-primary" data-act="workout-add">Add workout</button>
+          <button type="button" class="btn" data-act="note-add">Add symptoms or a note</button>
+        </div>
       </div>
     </details>`;
 }
 
 function renderNoteForm() {
   const n = S.note, editing = n.id != null;
+  const showWorkout = n.mode === "workout" || !!n.workout, showFeel = n.mode === "feel" || n.symptoms.length > 0;
+  const kinds = workoutChoices(n.workout).map(x =>
+    `<button type="button" class="chip" data-act="note-kind" data-name="${esc(x)}" aria-pressed="${!!n.workout && sameName(x, n.workout)}">${ut(x)}</button>`).join("");
   const chips = symptomChoices(n.symptoms).map(x =>
     `<button type="button" class="chip" data-act="note-sym" data-name="${esc(x)}" aria-pressed="${n.symptoms.some(y => sameName(x, y))}">${ut(x)}</button>`).join("");
+  const title = editing ? (n.mode === "workout" ? "Edit workout" : "Edit note") : n.mode === "workout" ? "Add workout" : "How do you feel?";
   return `
-    <div class="sheet-h"><h2 id="sheet-title">${editing ? "Edit note" : "How do you feel?"}</h2><button type="button" class="icon-btn" data-act="close-sheet" aria-label="Close">&times;</button></div>
+    <div class="sheet-h"><h2 id="sheet-title">${title}</h2><button type="button" class="icon-btn" data-act="close-sheet" aria-label="Close">&times;</button></div>
     <form class="form" data-form="note" autocomplete="off" novalidate>
       <div class="grid2">
         <label class="field">Date<input type="date" name="date" value="${dmyToIso(n.date)}" max="${dmyToIso(today())}" required></label>
         <label class="field">Time<input type="time" name="time" value="${esc(n.time || "")}"></label>
       </div>
+      ${showWorkout ? `
+      <div class="syms wk" role="group" aria-label="Workout">${kinds}</div>
+      <div class="grid2">
+        <label class="field">Another kind<input name="kind" dir="auto" maxlength="40" value="${esc(n.kind)}"></label>
+        <label class="field">Minutes<input name="minutes" inputmode="decimal" value="${esc(n.minutes)}"></label>
+      </div>` : ""}
+      ${showFeel ? `
       <div class="syms" role="group" aria-label="Symptoms">${chips}</div>
-      <label class="field">Another symptom<input name="other" dir="auto" maxlength="40" enterkeyhint="done" placeholder="Separate several with commas" value="${esc(n.other)}"></label>
-      <label class="field">Note<textarea name="notes" dir="auto" rows="3" maxlength="2000">${esc(n.notes || "")}</textarea></label>
+      <label class="field">Another symptom<input name="other" dir="auto" maxlength="40" enterkeyhint="done" placeholder="Separate several with commas" value="${esc(n.other)}"></label>` : ""}
+      <label class="field">${n.mode === "workout" ? "Details" : "Note"}<textarea name="notes" dir="auto" rows="3" maxlength="2000"${n.mode === "workout" ? ` placeholder="5 km at 6:30 min/km, how it felt…"` : ""}>${esc(n.notes || "")}</textarea></label>
       <p class="error" id="form-error" role="alert">${esc(S.ui.error)}</p>
       <div class="sheet-actions">
         <button type="button" class="btn" data-act="close-sheet">Cancel</button>
@@ -572,17 +595,20 @@ function renderNoteForm() {
       </div>
     </form>`;
 }
-function openNote(n) {
-  S.note = n ? { id: n.id, date: n.date, time: n.time, symptoms: n.symptoms.slice(), notes: n.notes || "", other: "" }
-    : { id: null, date: S.date, time: S.date === today() ? hm(now()) : "", symptoms: [], notes: "", other: "" };
+// n: a saved note to edit; mode: "workout" or "feel" for a new one.
+function openNote(n, mode) {
+  S.note = n ? { id: n.id, mode: n.workout ? "workout" : "feel", date: n.date, time: n.time, symptoms: n.symptoms.slice(), notes: n.notes || "", other: "",
+      workout: n.workout || "", kind: "", minutes: str(n.minutes) }
+    : { id: null, mode, date: S.date, time: S.date === today() ? hm(now()) : "", symptoms: [], notes: "", other: "", workout: "", kind: "", minutes: "" };
   S.ui.sheet = "note"; S.ui.error = ""; S.ui.busy = false;
   render();
 }
-function noteText(n) { return [n.symptoms.join(", "), n.notes && (n.symptoms.length ? "note" : "Note")].filter(Boolean).join(" · "); }
+function noteText(n) { return [workoutText(n), n.symptoms.join(", "), n.notes && (n.symptoms.length || n.workout ? "note" : "Note")].filter(Boolean).join(" · "); }
+const notePayload = x => ({ date: x.date, time: x.time, symptoms: x.symptoms, notes: x.notes, workout: x.workout, minutes: x.minutes });
 function deleteNote(id) {
   api(`/api/notes/${id}`, { method: "DELETE" }).then(res => {
     const x = res.deleted;
-    toast(["Deleted ", { u: noteText(x) }], () => send("POST", "/api/notes", { date: x.date, time: x.time, symptoms: x.symptoms, notes: x.notes }));
+    toast(["Deleted ", { u: noteText(x) }], () => send("POST", "/api/notes", notePayload(x)));
     return load();
   }).catch(fail);
 }
@@ -891,11 +917,11 @@ function renderInsights() {
   const s = r.summary, days = r.days, av = s.average, n = s.logged_days;
   const span = days.length;
   const sub = `<p class="ins-sub num">${dm(r.from)} – ${dm(r.to)} · ${span} ${span === 1 ? "day" : "days"}${n ? ` · averages over ${n} full ${n === 1 ? "day" : "days"}, today left out` : ""}</p>`;
-  if (!days.some(d => d.count) && !Object.values(s.measurements).some(Boolean) && !s.symptoms.length) {
+  if (!days.some(d => d.count) && !Object.values(s.measurements).some(Boolean) && !s.symptoms.length && !s.workouts.sessions) {
     return head + sub + `<p class="empty">Nothing logged in this range yet.</p>`;
   }
   return head + sub + (I.err ? `<p class="error">${esc(I.err)}</p>` : "")
-    + renderInsStats(r) + renderInsReview(r) + renderInsCarbs(r) + renderInsEnergy(r) + renderInsFasting(r) + renderInsBody(r) + renderInsSymptoms(r) + renderInsFoods(r);
+    + renderInsStats(r) + renderInsReview(r) + renderInsCarbs(r) + renderInsEnergy(r) + renderInsFasting(r) + renderInsBody(r) + renderInsWorkouts(r) + renderInsSymptoms(r) + renderInsFoods(r);
 }
 
 function renderInsStats(r) {
@@ -983,6 +1009,18 @@ function renderInsBody(r) {
     + bp
     + one("pulse", "Pulse, bpm", st.pulse, "", d => d.pulse);
   return out || insSection("body", "Body", "", `<p class="empty">No measurements in this range. Add them from the Day tab.</p>`);
+}
+
+function renderInsWorkouts(r) {
+  const w = r.summary.workouts;
+  if (!w.sessions) return "";
+  const top = w.kinds[0].sessions;
+  const rows = w.kinds.map(x => `<li>
+      <span class="it">${ut(x.name)}</span>
+      <span class="num">${x.sessions}×${x.minutes ? ` · ${g(x.minutes)} min` : ""}</span>
+      <span class="meter thin ink" aria-hidden="true"><i style="width:${x.sessions / top * 100}%"></i></span>
+      <small class="num">last on ${dm(x.last_date)}</small></li>`).join("");
+  return insSection("workouts", "Workouts", `${w.sessions} on ${w.days} of ${r.days.length} days${w.minutes ? ` · ${g(w.minutes)} min` : ""}`, `<ol class="tops">${rows}</ol>`);
 }
 
 function renderInsSymptoms(r) {
@@ -1088,6 +1126,12 @@ function shrinkImage(file) {
   });
 }
 
+// Leaving the review of a coach proposal without saving counts as declining it.
+function declineReview() {
+  const a = S.aiFood;
+  if (S.ui.sheet === "ai" && a && a.from === "coach" && a.msg) markProposal(a.msg.chat, a.msg.id, "rows", "declined");
+}
+
 function openReview(rows, from) {
   const a = S.aiFood, time = hm(now());
   a.rows = rows.map(r => ({ on: true, item: r.item, quantity: r.quantity || "", basis: r.basis,
@@ -1191,7 +1235,9 @@ function renderCoach() {
   const msgs = (chat ? chat.messages : []).map((m, i) => `<div class="msg ${m.role === "user" ? "me" : "bot"}">
       <p dir="auto">${esc(m.content)}</p>
       ${m.rows && m.rows.length ? `<ul class="msg-rows num">${m.rows.map(r => `<li><span class="it">${ut(r.item)}${r.quantity ? ` <small>${ut(r.quantity)}</small>` : ""}</span><span>${g(r.net_carbs_g)} g</span></li>`).join("")}</ul>
-      <button type="button" class="btn btn-primary" data-act="coach-review" data-i="${i}">Review and add</button>` : ""}
+      ${proposalState(m.rows_status, i, "rows", "Review and add")}` : ""}
+      ${m.notes && m.notes.length ? `<ul class="msg-rows">${m.notes.map(n => `<li><span class="it">${noteTags(n)}${n.notes ? `<small dir="auto"> ${esc(n.notes)}</small>` : ""}</span><span class="num">${n.date === today() ? "" : dm(n.date) + " "}${n.time || ""}</span></li>`).join("")}</ul>
+      ${proposalState(m.notes_status, i, "notes", m.notes.length === 1 ? "Add to log" : `Add ${m.notes.length} to log`)}` : ""}
       <time class="msg-at num" datetime="${esc(m.at)}">${stamp(m.at)}</time>
     </div>`).join("");
   const head = chat
@@ -1215,9 +1261,35 @@ function renderCoach() {
       <button class="btn btn-primary"${c.busy ? " disabled" : ""}>Send</button></div></form>`;
 }
 
-function paintCoach(focus) {
+// What became of a proposal: buttons while undecided, then a lasting line.
+function proposalState(status, i, kind, label) {
+  if (status === "added") return `<p class="outcome added">Added to your log</p>`;
+  if (status === "declined") return `<p class="outcome declined">Not added <button type="button" class="link" data-act="coach-undecide" data-kind="${kind}" data-i="${i}">Reconsider</button></p>`;
+  return `<div class="row-btns"><button type="button" class="btn btn-primary" data-act="coach-${kind === "rows" ? "review" : "add-notes"}" data-i="${i}">${label}</button>
+    <button type="button" class="btn" data-act="coach-decline" data-kind="${kind}" data-i="${i}">Dismiss</button></div>`;
+}
+// Record the outcome on the saved message, so every device shows it.
+function markProposal(chatId, msgId, kind, status) {
+  return send("PATCH", `/api/chats/${chatId}/messages/${msgId}`, { [kind + "_status"]: status }).then(res => {
+    const c = S.coach;
+    if (c.chat && c.chat.id === chatId && !c.busy) { c.chat = res.chat; if (S.view === "coach") paintCoach(false, true); }
+  }).catch(fail);
+}
+function addCoachNotes(m) {
+  const chatId = S.coach.chat.id;
+  Promise.all(m.notes.map(n => send("POST", "/api/notes", notePayload(n)))).then(res => {
+    const ids = res.map(r => r.note.id);
+    toast(`Added ${m.notes.map(noteText).join("; ")}`, () => Promise.all(ids.map(id => api(`/api/notes/${id}`, { method: "DELETE" })))
+      .then(() => markProposal(chatId, m.id, "notes", null)));
+    return markProposal(chatId, m.id, "notes", "added");
+  }).catch(fail);
+}
+
+function paintCoach(focus, keepScroll) {
+  const y = window.scrollY;
   paint("coach", renderCoach());
-  if (S.coach.chat) window.scrollTo(0, document.documentElement.scrollHeight); else window.scrollTo(0, 0);
+  if (keepScroll) window.scrollTo(0, y);
+  else if (S.coach.chat) window.scrollTo(0, document.documentElement.scrollHeight); else window.scrollTo(0, 0);
   if (focus) { const t = document.querySelector("#coach [name=q]"); if (t) t.focus(); }
 }
 
@@ -1503,7 +1575,16 @@ document.addEventListener("click", ev => {
   const act = el.dataset.act, id = +el.dataset.id, d = day();
   switch (act) {
     case "view": if (el.dataset.view !== S.view) setView(el.dataset.view); return;
-    case "note-add": openNote(); return;
+    case "note-add": openNote(null, "feel"); return;
+    case "workout-add": openNote(null, "workout"); return;
+    case "note-kind": {
+      const n = S.note, name = el.dataset.name, on = !(n.workout && sameName(n.workout, name));
+      n.workout = on ? name : ""; n.kind = "";
+      el.form.elements.kind.value = "";
+      el.form.querySelectorAll("[data-act=note-kind]").forEach(b => b.setAttribute("aria-pressed", String(on && b === el)));
+      if (on && !n.minutes) el.form.elements.minutes.focus();
+      return;
+    }
     case "note-edit": { const n = (d.notes || []).find(x => x.id === id); if (n) openNote(n); return; }
     case "note-delete": deleteNote(id); return;
     case "note-sym": {
@@ -1514,7 +1595,7 @@ document.addEventListener("click", ev => {
     }
     case "ai-fill": aiFill(); return;
     case "ai-back":
-      if (S.aiFood.from === "add") { S.ui.sheet = "add"; S.ui.error = ""; S.ui.busy = false; } else closeSheet();
+      if (S.aiFood.from === "add") { S.ui.sheet = "add"; S.ui.error = ""; S.ui.busy = false; } else { declineReview(); closeSheet(); }
       break;
     case "coach-ask": coachSend(COACH_STARTERS[+el.dataset.i]); return;
     case "coach-retry": coachSend(null); return;
@@ -1526,7 +1607,17 @@ document.addEventListener("click", ev => {
       api(`/api/chats/${chat.id}`, { method: "DELETE" }).then(closeChat).catch(fail);
       return;
     }
-    case "coach-review": { const m = S.coach.chat && S.coach.chat.messages[+el.dataset.i]; if (m && m.rows.length) { S.aiFood = blankAiFood(); openReview(m.rows, "coach"); } return; }
+    case "coach-review": {
+      const m = S.coach.chat && S.coach.chat.messages[+el.dataset.i];
+      if (m && m.rows.length) { S.aiFood = blankAiFood(); S.aiFood.msg = { chat: S.coach.chat.id, id: m.id }; openReview(m.rows, "coach"); }
+      return;
+    }
+    case "coach-add-notes": { const m = S.coach.chat && S.coach.chat.messages[+el.dataset.i]; if (m && m.notes.length) { el.disabled = true; addCoachNotes(m); } return; }
+    case "coach-decline": case "coach-undecide": {
+      const m = S.coach.chat && S.coach.chat.messages[+el.dataset.i];
+      if (m) markProposal(S.coach.chat.id, m.id, el.dataset.kind, act === "coach-decline" ? "declined" : null);
+      return;
+    }
     case "ins-review": insReview(); return;
     case "ins-range":
       S.ins.range = el.dataset.range; saveRange(S.ins.range);
@@ -1548,7 +1639,7 @@ document.addEventListener("click", ev => {
     case "log-again": { const x = entryById(id); if (x) logNow(x); return; }
     case "quick": { const x = S.top[+el.dataset.i]; if (x) logNow(x); return; }
     case "open-add": openAdd(); render(); focusItem(); return;
-    case "close-sheet": closeSheet(); break;
+    case "close-sheet": declineReview(); closeSheet(); break;
     case "pick": {
       const x = S.sugg[+el.dataset.i];
       if (!x) return;
@@ -1741,8 +1832,13 @@ document.addEventListener("submit", ev => {
   if (kind === "note") {
     const n = S.note, symptoms = n.symptoms.slice();
     for (const x of n.other.split(",").map(x => x.trim()).filter(Boolean)) if (!symptoms.some(y => sameName(x, y))) symptoms.push(x);
-    if (!symptoms.length && !n.notes.trim()) { S.ui.error = "Pick a symptom or write a note."; document.getElementById("form-error").textContent = S.ui.error; return; }
-    const payload = { date: n.date, time: n.time || null, symptoms, notes: n.notes.trim() ? n.notes : null }, editing = n.id != null;
+    const fails = msg => { S.ui.error = msg; document.getElementById("form-error").textContent = msg; };
+    const workout = n.kind.trim() || n.workout || null, minutes = numOrNull(n.minutes);
+    if (n.mode === "workout" && !workout) return fails("Pick the kind of workout.");
+    if (minutes != null && (isNaN(minutes) || !(minutes > 0))) return fails("Minutes must be a number above 0.");
+    if (!symptoms.length && !n.notes.trim() && !workout) return fails("Pick a symptom or write a note.");
+    const payload = { date: n.date, time: n.time || null, symptoms, notes: n.notes.trim() ? n.notes : null,
+      workout, minutes: workout ? minutes : null }, editing = n.id != null;
     S.ui.error = ""; S.ui.busy = true;
     (editing ? send("PATCH", `/api/notes/${n.id}`, payload) : send("POST", "/api/notes", payload)).then(res => {
       const saved = res.note;
@@ -1764,13 +1860,14 @@ document.addEventListener("submit", ev => {
     if (entries.some(e => !e.item.trim())) return fails("Every row needs an item name.");
     if (entries.some(e => e.net_carbs_g == null || MACROS.some(k => e[k] != null && isNaN(e[k])))) return fails("Every row needs net carbs, and numbers only.");
     S.ui.error = ""; S.ui.busy = true; document.getElementById("ai-go").disabled = true;
-    const from = a.from;
+    const from = a.from, msg = a.msg;
     send("POST", "/api/entries", entries).then(res => {
       const ids = res.created.map(x => x.id), net = entries.reduce((t, e) => t + e.net_carbs_g, 0);
       closeSheet(); loadLists();
       S.aiFood = blankAiFood();
+      if (msg) markProposal(msg.chat, msg.id, "rows", "added");
       toast(`Added ${ids.length} ${ids.length === 1 ? "row" : "rows"} · ${g(net)} g${a.date !== S.date || from !== "add" ? ` to ${a.date.slice(0, 5)}` : ""}`,
-        () => Promise.all(ids.map(id => api(`/api/entries/${id}`, { method: "DELETE" }))));
+        () => Promise.all(ids.map(id => api(`/api/entries/${id}`, { method: "DELETE" }))).then(() => msg && markProposal(msg.chat, msg.id, "rows", null)));
       if (from !== "add") { render(); return; }
       if (a.date !== S.date) goTo(a.date); else load();
     }).catch(e => { S.ui.busy = false; S.ui.error = e.message; render(); });
@@ -1849,7 +1946,7 @@ document.addEventListener("keydown", ev => {
   if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && ev.target.name === "q" && ev.target.form && ev.target.form.dataset.form === "coach") {
     ev.preventDefault(); coachSend(ev.target.value); return;
   }
-  if (ev.key === "Escape" && S.ui.sheet) { closeSheet(); render(); }
+  if (ev.key === "Escape" && S.ui.sheet) { declineReview(); closeSheet(); render(); }
 });
 
 /* Live fast clock: repaint only the glance panel (not while one of its editors is open). */

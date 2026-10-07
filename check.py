@@ -310,8 +310,22 @@ def run_note_checks(base):
           and ins["summary"]["symptoms"] == [{"name": "Nausea", "days": 1, "last_date": d}], ins["summary"]["symptoms"])
     status, body = http(base, "GET", "/api/export.csv?table=notes")
     check("CSV export of notes", status == 200 and "02/03/2026" in body and "Nausea" in body and "slept badly" in body, body[:200])
+    status, w = req("POST", "/api/notes", {"date": d, "time": "17:00", "workout": " Run ", "minutes": 32, "notes": "5 km"})
+    check("add workout", status == 201 and w["note"]["workout"] == "Run" and w["note"]["minutes"] == 32
+          and w["note"]["symptoms"] == [] and req("GET", f"/api/day?date={d}")[1]["workout_names"] == ["Run"], w)
+    check("workout: minutes need a kind and a sane value", req("POST", "/api/notes", {"date": d, "minutes": 30, "notes": "x"})[0] == 400
+          and req("POST", "/api/notes", {"date": d, "workout": "Run", "minutes": 0})[0] == 400
+          and req("POST", "/api/notes", {"date": d, "workout": "Gym"})[0] == 201)
+    ins = req("GET", "/api/insights")[1]
+    row = next(x for x in ins["days"] if x["date"] == d)
+    ws = ins["summary"]["workouts"]
+    check("insights: workouts per day and per kind", row["workouts"] == [{"workout": "Run", "minutes": 32}, {"workout": "Gym", "minutes": None}]
+          and ws["sessions"] == 2 and ws["days"] == 1 and ws["minutes"] == 32
+          and [k["name"] for k in ws["kinds"]] == ["Gym", "Run"], ws)
+    status, res = req("PATCH", f"/api/notes/{w['note']['id']}", {"minutes": None})
+    check("update workout", status == 200 and res["note"]["minutes"] is None and res["note"]["workout"] == "Run", res)
     status, res = req("DELETE", f"/api/notes/{res2['note']['id']}")
-    check("delete note", status == 200 and len(res["notes"]) == 1 and req("DELETE", "/api/notes/99999")[0] == 404, res)
+    check("delete note", status == 200 and len(res["notes"]) == 3 and req("DELETE", "/api/notes/99999")[0] == 404, res)
 
 
 def run_insights_checks(base):
@@ -571,15 +585,39 @@ def run_ai_checks(base):
               and len(chat["title"]) <= 60 and chat["title"].endswith("…"), chat.get("title"))
         check("coach: both messages saved with times, proposed rows kept, nothing logged", [m["role"] for m in msgs] == ["user", "assistant"]
               and msgs[1]["content"] == "You have room for it. Go ahead." and msgs[1]["rows"][0]["item"] == "avocado"
-              and msgs[1]["rows"][0]["basis"] == "estimate" and all(m["at"].startswith("20") for m in msgs) and count() == before, msgs)
+              and msgs[1]["rows"][0]["basis"] == "estimate" and all(m["at"].startswith("20") for m in msgs) and count() == before
+              and msgs[1]["rows_status"] is None and msgs[1]["notes"] == [], msgs)
+        mid = msgs[1]["id"]
+        status, body = http(base, "PATCH", f"/api/chats/{cid}/messages/{mid}", {"rows_status": "added"})
+        check("proposal outcome is saved on the message", status == 200
+              and json.loads(body)["chat"]["messages"][1]["rows_status"] == "added"
+              and json.loads(http(base, "GET", f"/api/chats/{cid}")[1])["messages"][1]["rows_status"] == "added", body)
+        check("proposal outcome: declined, cleared, and bad values", http(base, "PATCH", f"/api/chats/{cid}/messages/{mid}", {"rows_status": "declined", "notes_status": None})[0] == 200
+              and http(base, "PATCH", f"/api/chats/{cid}/messages/{mid}", {"rows_status": "maybe"})[0] == 400
+              and http(base, "PATCH", f"/api/chats/{cid}/messages/99999", {"rows_status": "added"})[0] == 404
+              and http(base, "PATCH", f"/api/chats/{cid}/messages/{mid}", {"content": "x"})[0] == 400)
+        notes_before = len(db.get_day()["notes"])
+        fake["reply"] = "Ready to approve.\nLOG: " + json.dumps({"notes": [
+            {"workout": "Run", "minutes": 32, "notes": "5 ק״מ"}, {"symptoms": ["Headache"], "date": "01/03/2026", "time": "08:15"},
+            {"minutes": 10}, {"date": "01/01/2999", "notes": "future"}, "junk"]}, ensure_ascii=False)
+        status, res = post("/api/ai/chat", {"chat_id": cid, "message": "log my run"})
+        got = res["chat"]["messages"][-1]
+        check("coach proposes notes and workouts: cleaned, dated, not saved", status == 200 and got["rows"] == [] and len(got["notes"]) == 2
+              and got["notes"][0] == {"date": db.format_date(db.today_iso()), "time": got["notes"][0]["time"], "workout": "Run",
+                                      "minutes": 32, "symptoms": [], "notes": "5 ק״מ"} and got["notes"][0]["time"]
+              and got["notes"][1]["date"] == "01/03/2026" and got["notes"][1]["time"] == "08:15" and got["notes_status"] is None
+              and len(db.get_day()["notes"]) == notes_before, got)
+        check("coach is told how to propose notes", "Note format" in fake["seen"][-1]["body"]["messages"][0]["content"])
+        fake["reply"] = "Plain advice in עברית."
+        post("/api/ai/chat", {"chat_id": cid, "message": "thanks"})
         system = fake["seen"][-1]["body"]["messages"][0]["content"]
         check("coach sees the log", "LOG DATA" in system and "net_carbs_goal_g" in system and "KNOWN FOODS" in system)
         session = fake["seen"][-1]["session"]
         fake["reply"] = "Plain advice in עברית."
         status, res = post("/api/ai/chat", {"chat_id": cid, "message": "ועוד שאלה"})
-        check("coach: the saved thread is sent on, same session id", status == 200 and len(res["chat"]["messages"]) == 4
-              and res["chat"]["messages"][3] == dict(res["chat"]["messages"][3], content="Plain advice in עברית.", rows=[])
-              and [m["role"] for m in fake["seen"][-1]["body"]["messages"]] == ["system", "user", "assistant", "user"]
+        check("coach: the saved thread is sent on, same session id", status == 200 and len(res["chat"]["messages"]) == 8
+              and res["chat"]["messages"][7] == dict(res["chat"]["messages"][7], content="Plain advice in עברית.", rows=[])
+              and [m["role"] for m in fake["seen"][-1]["body"]["messages"]] == ["system"] + ["user", "assistant"] * 3 + ["user"]
               and fake["seen"][-1]["session"] == session and res["chat"]["title"] == chat["title"], res)
         status, other = post("/api/ai/chat", {"message": "שיחה שנייה"})
         check("coach: another chat gets its own session id and Hebrew title", other["chat"]["title"] == "שיחה שנייה"
@@ -587,17 +625,17 @@ def run_ai_checks(base):
         status, body = http(base, "GET", "/api/chats")
         lst = json.loads(body)
         check("chat list: latest first with message counts", status == 200 and [c["id"] for c in lst[:2]] == [other["chat"]["id"], cid]
-              and lst[1]["messages"] == 4 and lst[0]["title"] == "שיחה שנייה", lst)
+              and lst[1]["messages"] == 8 and lst[0]["title"] == "שיחה שנייה", lst)
         status, body = http(base, "GET", f"/api/chats/{cid}")
         check("a chat can be opened from any device", status == 200 and json.loads(body) == res["chat"])
         fake["status"] = 500
         status, res = post("/api/ai/chat", {"chat_id": cid, "message": "third"})
         check("model failure: the message stays saved and comes back with the error", status == 502
-              and res["chat"]["messages"][-1]["content"] == "third" and len(res["chat"]["messages"]) == 5, res)
+              and res["chat"]["messages"][-1]["content"] == "third" and len(res["chat"]["messages"]) == 9, res)
         fake["status"] = 200
         n = len(fake["seen"])
         status, res = post("/api/ai/chat", {"chat_id": cid, "retry": True})
-        check("retry answers the saved message without repeating it", status == 200 and len(res["chat"]["messages"]) == 6
+        check("retry answers the saved message without repeating it", status == 200 and len(res["chat"]["messages"]) == 10
               and fake["seen"][-1]["body"]["messages"][-1]["content"] == "third" and len(fake["seen"]) == n + 1, res)
         check("coach: bad requests", post("/api/ai/chat", {"message": " "})[0] == 400
               and post("/api/ai/chat", {"chat_id": cid, "retry": True})[0] == 400
@@ -748,9 +786,9 @@ def run_mcp_checks():
         check("MCP update_measurement", err is False and out["measurement"]["pulse"] == 61, out)
         err, out = call(15, "delete_measurement", {"id": mid})
         check("MCP delete_measurement", err is False and out["body"]["bp_sys"] is None, out)
-        err, out = call(16, "add_note", {"date": "05/03/2026", "symptoms": ["Tiredness"], "notes": "עייף"})
+        err, out = call(16, "add_note", {"date": "05/03/2026", "symptoms": ["Tiredness"], "notes": "עייף", "workout": "Walk", "minutes": 20})
         check("MCP add_note", err is False and out["note"]["source"] == "mcp" and out["note"]["notes"] == "עייף"
-              and db.get_day("05/03/2026")["notes"][0]["symptoms"] == ["Tiredness"], out)
+              and db.get_day("05/03/2026")["notes"][0]["symptoms"] == ["Tiredness"] and out["note"]["workout"] == "Walk", out)
         err, out = call(17, "delete_note", {"id": out["note"]["id"]})
         check("MCP delete_note", err is False and out["notes"] == [], out)
         err, out = call(9, "delete_entry", {"id": eid})

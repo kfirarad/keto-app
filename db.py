@@ -94,13 +94,16 @@ CREATE TABLE IF NOT EXISTS measurements (
 );
 CREATE INDEX IF NOT EXISTS measurements_date_idx ON measurements (m_date);
 
--- How the day felt: symptoms (JSON array of names) and/or a free note.
+-- How the day went: symptoms (JSON array of names), a workout (kind and
+-- minutes) and/or a free note.
 CREATE TABLE IF NOT EXISTS day_notes (
     id         INTEGER PRIMARY KEY,
     n_date     TEXT NOT NULL,
     n_time     TEXT,
     symptoms   TEXT NOT NULL DEFAULT '[]',
     notes      TEXT,
+    workout    TEXT,
+    minutes    REAL,
     source     TEXT NOT NULL CHECK (source IN ('ui', 'mcp')),
     created_at TEXT NOT NULL
 );
@@ -120,7 +123,10 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     role       TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
     content    TEXT NOT NULL,
     rows       TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    notes        TEXT,     -- JSON list of notes / workouts the coach proposed
+    rows_status  TEXT,     -- what the user did with the proposal: added | declined
+    notes_status TEXT
 );
 CREATE INDEX IF NOT EXISTS chat_messages_chat_idx ON chat_messages (chat_id, id);
 
@@ -164,8 +170,29 @@ def connect():
     conn.execute("PRAGMA busy_timeout = 10000")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.executescript(SCHEMA)
+    _migrate_columns(conn)
     _migrate_body_log(conn)
     return conn
+
+
+# Columns added after a table first shipped: (table, column, declaration).
+ADDED_COLUMNS = (
+    ("day_notes", "workout", "TEXT"),
+    ("day_notes", "minutes", "REAL"),
+    ("chat_messages", "notes", "TEXT"),
+    ("chat_messages", "rows_status", "TEXT"),
+    ("chat_messages", "notes_status", "TEXT"),
+)
+
+
+def _migrate_columns(conn):
+    for table, col, decl in ADDED_COLUMNS:
+        if col not in [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]:
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+            except sqlite3.OperationalError as e:      # the other process added it first
+                if "duplicate column" not in str(e):
+                    raise
 
 
 def _migrate_body_log(conn):
@@ -453,6 +480,7 @@ def _day(conn, iso):
     out["body"] = _body(conn, iso)
     out["notes"] = _notes(conn, iso)
     out["symptom_names"] = _symptom_names(conn)
+    out["workout_names"] = _workout_names(conn)
     out["first_date"] = format_date(_first_iso(conn))
     return out
 
@@ -1218,7 +1246,8 @@ def import_sheet(text, dry_run=False):
 
 # ---- notes and symptoms --------------------------------------------------
 
-NOTE_INPUT = ("date", "time", "symptoms", "notes")
+NOTE_INPUT = ("date", "time", "symptoms", "notes", "workout", "minutes")
+WORKOUT_MINUTES_MAX = 1440
 SYMPTOMS_MAX = 12
 SYMPTOM_LEN = 40
 NOTE_LEN = 2000
@@ -1226,7 +1255,7 @@ _N_ORDER = "ORDER BY n_date, n_time IS NULL, n_time, id"
 
 
 def validate_note(obj):
-    """One note -> DB column values. Needs a symptom or some text."""
+    """One note -> DB column values. Needs a symptom, a workout or some text."""
     _check_fields(obj, NOTE_INPUT, "note")
     symptoms = obj.get("symptoms")
     if symptoms is None:
@@ -1245,15 +1274,28 @@ def validate_note(obj):
     notes = _text(obj.get("notes"), "notes")
     if notes is not None and len(notes) > NOTE_LEN:
         raise ValidationError(f"notes must be at most {NOTE_LEN} characters")
-    if not names and notes is None:
-        raise ValidationError("give at least one symptom or a note")
+    workout = _text(obj.get("workout"), "workout")
+    if workout is not None:
+        workout = " ".join(workout.split())
+        if len(workout) > SYMPTOM_LEN:
+            raise ValidationError(f"workout must be at most {SYMPTOM_LEN} characters")
+    minutes = _number(obj.get("minutes"), "minutes")
+    if minutes is not None:
+        if workout is None:
+            raise ValidationError("minutes needs a workout")
+        if not 0 < minutes <= WORKOUT_MINUTES_MAX:
+            raise ValidationError(f"minutes must be between 1 and {WORKOUT_MINUTES_MAX}")
+    if not names and notes is None and workout is None:
+        raise ValidationError("give at least one symptom, a workout or a note")
     return {"n_date": parse_date(obj.get("date")), "n_time": parse_time(obj.get("time")),
-            "symptoms": json.dumps(names, ensure_ascii=False), "notes": notes}
+            "symptoms": json.dumps(names, ensure_ascii=False), "notes": notes,
+            "workout": workout, "minutes": minutes}
 
 
 def _note_out(r):
     return {"id": r["id"], "date": format_date(r["n_date"]), "time": r["n_time"],
             "symptoms": json.loads(r["symptoms"]), "notes": r["notes"],
+            "workout": r["workout"], "minutes": None if r["minutes"] is None else _clean_num(r["minutes"]),
             "source": r["source"], "created_at": r["created_at"]}
 
 
@@ -1269,6 +1311,13 @@ def _symptom_names(conn):
         for name in json.loads(raw):
             count[name] = count.get(name, 0) + 1
     return sorted(count, key=lambda n: (-count[n], n))
+
+
+def _workout_names(conn):
+    """Workout kinds used so far, most used first."""
+    return [r[0] for r in conn.execute(
+        "SELECT workout FROM day_notes WHERE workout IS NOT NULL"
+        " GROUP BY workout ORDER BY COUNT(*) DESC, workout")]
 
 
 def _get_note(conn, nid):
@@ -1287,8 +1336,8 @@ def add_note(payload, source):
     try:
         with conn:
             cur = conn.execute(
-                "INSERT INTO day_notes (n_date, n_time, symptoms, notes, source, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO day_notes (n_date, n_time, symptoms, notes, workout, minutes, source, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (*row.values(), source, datetime.now(TZ).isoformat(timespec="seconds")))
         return _note_out(_get_note(conn, cur.lastrowid)), _notes(conn, row["n_date"])
     finally:
@@ -1349,7 +1398,9 @@ def _chat_out(conn, cid):
     if c is None:
         raise NotFoundError(f"chat {cid} not found")
     msgs = [{"id": m["id"], "role": m["role"], "content": m["content"],
-             "rows": json.loads(m["rows"]) if m["rows"] else [], "at": m["created_at"]}
+             "rows": json.loads(m["rows"]) if m["rows"] else [],
+             "notes": json.loads(m["notes"]) if m["notes"] else [],
+             "rows_status": m["rows_status"], "notes_status": m["notes_status"], "at": m["created_at"]}
             for m in conn.execute("SELECT * FROM chat_messages WHERE chat_id = ? ORDER BY id", (cid,))]
     return {"id": c["id"], "title": c["title"], "created_at": c["created_at"],
             "updated_at": c["updated_at"], "messages": msgs}
@@ -1376,7 +1427,7 @@ def get_chat(chat_id):
         conn.close()
 
 
-def add_chat_message(chat_id, role, content, rows=None):
+def add_chat_message(chat_id, role, content, rows=None, notes=None):
     """Append a message; chat_id None starts a chat named after this message.
     Returns the chat."""
     if role not in ("user", "assistant"):
@@ -1397,8 +1448,35 @@ def add_chat_message(chat_id, role, content, rows=None):
                 if conn.execute("UPDATE chats SET updated_at = ? WHERE id = ?", (now, cid)).rowcount == 0:
                     raise NotFoundError(f"chat {cid} not found")
             conn.execute(
-                "INSERT INTO chat_messages (chat_id, role, content, rows, created_at) VALUES (?, ?, ?, ?, ?)",
-                (cid, role, content.strip(), json.dumps(rows, ensure_ascii=False) if rows else None, now))
+                "INSERT INTO chat_messages (chat_id, role, content, rows, notes, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (cid, role, content.strip(), json.dumps(rows, ensure_ascii=False) if rows else None,
+                 json.dumps(notes, ensure_ascii=False) if notes else None, now))
+        return _chat_out(conn, cid)
+    finally:
+        conn.close()
+
+
+PROPOSAL_STATUS = ("added", "declined")
+
+
+def set_chat_message_status(chat_id, message_id, changes):
+    """Record what the user did with a proposal: rows_status / notes_status is
+    "added", "declined" or null (undecided). Returns the chat."""
+    cid, mid = _id(chat_id, "chat"), _id(message_id, "message")
+    _check_fields(changes, ("rows_status", "notes_status"), "changes")
+    if not changes:
+        raise ValidationError("no fields to change")
+    for k, v in changes.items():
+        if v is not None and v not in PROPOSAL_STATUS:
+            raise ValidationError(f"{k} must be added, declined or null")
+    conn = connect()
+    try:
+        with conn:
+            sets = ", ".join(f"{k} = ?" for k in changes)
+            if conn.execute(f"UPDATE chat_messages SET {sets} WHERE id = ? AND chat_id = ?",
+                            (*changes.values(), mid, cid)).rowcount == 0:
+                raise NotFoundError(f"message {mid} not found in chat {cid}")
         return _chat_out(conn, cid)
     finally:
         conn.close()
@@ -1505,10 +1583,13 @@ def insights(days=None):
                     vals[f] = _clean_num(r[f])
         water = dict(conn.execute(
             "SELECT log_date, water_ml FROM body_log WHERE log_date BETWEEN ? AND ?", rng).fetchall())
-        felt = {}
+        felt, moved = {}, {}
         for r in conn.execute(f"SELECT * FROM day_notes WHERE n_date BETWEEN ? AND ? {_N_ORDER}", rng):
             names = felt.setdefault(r["n_date"], [])
             names.extend(x for x in json.loads(r["symptoms"]) if x not in names)
+            if r["workout"]:
+                moved.setdefault(r["n_date"], []).append(
+                    {"workout": r["workout"], "minutes": None if r["minutes"] is None else _clean_num(r["minutes"])})
         tops = conn.execute(
             "SELECT item, COUNT(*) AS times, SUM(net_carbs_g) AS net, SUM(calories) AS calories"
             " FROM entries WHERE entry_date BETWEEN ? AND ? GROUP BY item"
@@ -1545,6 +1626,7 @@ def insights(days=None):
             "gki": gki,
             "water_ml": water.get(iso),
             "symptoms": felt.get(iso, []),
+            "workouts": moved.get(iso, []),
         })
 
     done = [d for d in out if d["count"] and d["date"] != format_date(today)]
@@ -1559,7 +1641,18 @@ def insights(days=None):
     for d in out:
         for name in d["symptoms"]:
             symptom_days.setdefault(name, []).append(d["date"])
+    kinds = {}
+    for d in out:
+        for w in d["workouts"]:
+            k = kinds.setdefault(w["workout"], {"name": w["workout"], "sessions": 0, "minutes": 0, "last_date": None})
+            k["sessions"] += 1
+            k["minutes"] = _clean_num(k["minutes"] + (w["minutes"] or 0))
+            k["last_date"] = d["date"]
     summary = {
+        "workouts": {"sessions": sum(k["sessions"] for k in kinds.values()),
+                     "days": sum(1 for d in out if d["workouts"]),
+                     "minutes": _clean_num(sum(k["minutes"] for k in kinds.values())),
+                     "kinds": sorted(kinds.values(), key=lambda k: (-k["sessions"], k["name"]))},
         "symptoms": [{"name": k, "days": len(v), "last_date": v[-1]}
                      for k, v in sorted(symptom_days.items(), key=lambda kv: (-len(kv[1]), kv[0]))],
         "logged_days": len(done),

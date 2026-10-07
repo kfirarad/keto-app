@@ -175,8 +175,9 @@ TOOLS = [
     },
     {
         "name": "add_note",
-        "description": "Log how the user feels at a date and time: symptoms (a list of short names "
-                       "such as Headache, Nausea, Tiredness) and/or free-text notes. "
+        "description": "Log a workout or how the user feels at a date and time: workout (kind) "
+                       "with minutes, symptoms (a list of short names such as Headache, Nausea, "
+                       "Tiredness) and/or free-text notes. "
                        "Returns the note and that day's notes.",
         "inputSchema": {
             "type": "object",
@@ -184,6 +185,8 @@ TOOLS = [
                 "date": {"type": "string", "description": "DD/MM/YYYY. Default: today."},
                 "time": {"type": ["string", "null"], "description": "HH:MM, 24-hour."},
                 "symptoms": {"type": "array", "items": {"type": "string"}},
+                "workout": {"type": ["string", "null"], "description": "Kind of workout: Run, Walk, Gym, ..."},
+                "minutes": {"type": ["number", "null"], "description": "Workout length in minutes."},
                 "notes": {"type": ["string", "null"]},
             },
             "additionalProperties": False,

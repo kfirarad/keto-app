@@ -30,6 +30,7 @@ FAST_PATH = re.compile(r"^/api/fasts/(\d+)$")
 MEASURE_PATH = re.compile(r"^/api/measurements/(\d+)$")
 NOTE_PATH = re.compile(r"^/api/notes/(\d+)$")
 CHAT_PATH = re.compile(r"^/api/chats/(\d+)$")
+CHAT_MSG_PATH = re.compile(r"^/api/chats/(\d+)/messages/(\d+)$")
 
 
 class HTTPError(Exception):
@@ -190,6 +191,10 @@ class Handler(BaseHTTPRequestHandler):
         if m:
             row, body = db.update_measurement(int(m.group(1)), self._read_json())
             self._json(200, {"measurement": row, "body": body})
+            return
+        m = CHAT_MSG_PATH.match(path)
+        if m:
+            self._json(200, {"chat": db.set_chat_message_status(int(m.group(1)), int(m.group(2)), self._read_json())})
             return
         m = NOTE_PATH.match(path)
         if m:
