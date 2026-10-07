@@ -126,7 +126,9 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created_at TEXT NOT NULL,
     notes        TEXT,     -- JSON list of notes / workouts the coach proposed
     rows_status  TEXT,     -- what the user did with the proposal: added | declined
-    notes_status TEXT
+    notes_status TEXT,
+    measurements TEXT,     -- JSON list of body measurements the coach proposed
+    measurements_status TEXT
 );
 CREATE INDEX IF NOT EXISTS chat_messages_chat_idx ON chat_messages (chat_id, id);
 
@@ -182,6 +184,8 @@ ADDED_COLUMNS = (
     ("chat_messages", "notes", "TEXT"),
     ("chat_messages", "rows_status", "TEXT"),
     ("chat_messages", "notes_status", "TEXT"),
+    ("chat_messages", "measurements", "TEXT"),
+    ("chat_messages", "measurements_status", "TEXT"),
 )
 
 
@@ -1400,7 +1404,9 @@ def _chat_out(conn, cid):
     msgs = [{"id": m["id"], "role": m["role"], "content": m["content"],
              "rows": json.loads(m["rows"]) if m["rows"] else [],
              "notes": json.loads(m["notes"]) if m["notes"] else [],
-             "rows_status": m["rows_status"], "notes_status": m["notes_status"], "at": m["created_at"]}
+             "measurements": json.loads(m["measurements"]) if m["measurements"] else [],
+             "rows_status": m["rows_status"], "notes_status": m["notes_status"],
+             "measurements_status": m["measurements_status"], "at": m["created_at"]}
             for m in conn.execute("SELECT * FROM chat_messages WHERE chat_id = ? ORDER BY id", (cid,))]
     return {"id": c["id"], "title": c["title"], "created_at": c["created_at"],
             "updated_at": c["updated_at"], "messages": msgs}
@@ -1427,7 +1433,7 @@ def get_chat(chat_id):
         conn.close()
 
 
-def add_chat_message(chat_id, role, content, rows=None, notes=None):
+def add_chat_message(chat_id, role, content, rows=None, notes=None, measurements=None):
     """Append a message; chat_id None starts a chat named after this message.
     Returns the chat."""
     if role not in ("user", "assistant"):
@@ -1448,10 +1454,10 @@ def add_chat_message(chat_id, role, content, rows=None, notes=None):
                 if conn.execute("UPDATE chats SET updated_at = ? WHERE id = ?", (now, cid)).rowcount == 0:
                     raise NotFoundError(f"chat {cid} not found")
             conn.execute(
-                "INSERT INTO chat_messages (chat_id, role, content, rows, notes, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (cid, role, content.strip(), json.dumps(rows, ensure_ascii=False) if rows else None,
-                 json.dumps(notes, ensure_ascii=False) if notes else None, now))
+                "INSERT INTO chat_messages (chat_id, role, content, rows, notes, measurements, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (cid, role, content.strip(), *(json.dumps(x, ensure_ascii=False) if x else None
+                                               for x in (rows, notes, measurements)), now))
         return _chat_out(conn, cid)
     finally:
         conn.close()
@@ -1461,10 +1467,10 @@ PROPOSAL_STATUS = ("added", "declined")
 
 
 def set_chat_message_status(chat_id, message_id, changes):
-    """Record what the user did with a proposal: rows_status / notes_status is
-    "added", "declined" or null (undecided). Returns the chat."""
+    """Record what the user did with a proposal: rows_status, notes_status or
+    measurements_status is "added", "declined" or null (undecided). Returns the chat."""
     cid, mid = _id(chat_id, "chat"), _id(message_id, "message")
-    _check_fields(changes, ("rows_status", "notes_status"), "changes")
+    _check_fields(changes, ("rows_status", "notes_status", "measurements_status"), "changes")
     if not changes:
         raise ValidationError("no fields to change")
     for k, v in changes.items():

@@ -608,6 +608,25 @@ def run_ai_checks(base):
               and got["notes"][1]["date"] == "01/03/2026" and got["notes"][1]["time"] == "08:15" and got["notes_status"] is None
               and len(db.get_day()["notes"]) == notes_before, got)
         check("coach is told how to propose notes", "Note format" in fake["seen"][-1]["body"]["messages"][0]["content"])
+        fake["reply"] = "Ready.\nLOG: " + json.dumps({"measurements": [
+            {"weight_kg": 82.4, "glucose_mmol": 95, "ketones_mmol": 1.8, "bp_sys": 121, "bp_dia": 79},
+            {"glucose_mmol": 5.2, "date": "01/03/2026", "time": "07:00", "notes": "fasted"},
+            {"bp_sys": 120}, {"weight_kg": 5}, {"notes": "nothing"}, {"weight_kg": 80, "date": "01/01/2999"}]})
+        body_before = db.get_day()["body"]["measurements"]
+        status, res = post("/api/ai/chat", {"chat_id": cid, "message": "weight 82.4, glucose 95, ketones 1.8, bp 121/79"})
+        got = res["chat"]["messages"][-1]
+        ms = got["measurements"]
+        check("coach proposes measurements: cleaned, mg/dL converted, not saved", status == 200 and len(ms) == 2
+              and ms[0]["weight_kg"] == 82.4 and ms[0]["glucose_mmol"] == 5.27 and ms[0]["bp_sys"] == 121 and ms[0]["bp_dia"] == 79
+              and ms[0]["pulse"] is None and ms[0]["date"] == db.format_date(db.today_iso()) and ms[0]["time"]
+              and ms[1] == dict(ms[1], date="01/03/2026", time="07:00", glucose_mmol=5.2, notes="fasted")
+              and got["measurements_status"] is None and db.get_day()["body"]["measurements"] == body_before, got)
+        status, body = http(base, "POST", "/api/measurements", {k: v for k, v in ms[0].items()})
+        check("a proposed measurement is accepted by the measurements API as it is", status == 201, body)
+        http(base, "DELETE", f"/api/measurements/{json.loads(body)['measurement']['id']}")
+        check("measurement outcome is saved", http(base, "PATCH", f"/api/chats/{cid}/messages/{got['id']}", {"measurements_status": "added"})[0] == 200
+              and json.loads(http(base, "GET", f"/api/chats/{cid}")[1])["messages"][-1]["measurements_status"] == "added"
+              and "Measurement format" in fake["seen"][-1]["body"]["messages"][0]["content"])
         fake["reply"] = "Plain advice in עברית."
         post("/api/ai/chat", {"chat_id": cid, "message": "thanks"})
         system = fake["seen"][-1]["body"]["messages"][0]["content"]
@@ -615,9 +634,9 @@ def run_ai_checks(base):
         session = fake["seen"][-1]["session"]
         fake["reply"] = "Plain advice in עברית."
         status, res = post("/api/ai/chat", {"chat_id": cid, "message": "ועוד שאלה"})
-        check("coach: the saved thread is sent on, same session id", status == 200 and len(res["chat"]["messages"]) == 8
-              and res["chat"]["messages"][7] == dict(res["chat"]["messages"][7], content="Plain advice in עברית.", rows=[])
-              and [m["role"] for m in fake["seen"][-1]["body"]["messages"]] == ["system"] + ["user", "assistant"] * 3 + ["user"]
+        check("coach: the saved thread is sent on, same session id", status == 200 and len(res["chat"]["messages"]) == 10
+              and res["chat"]["messages"][9] == dict(res["chat"]["messages"][9], content="Plain advice in עברית.", rows=[])
+              and [m["role"] for m in fake["seen"][-1]["body"]["messages"]] == ["system"] + ["user", "assistant"] * 4 + ["user"]
               and fake["seen"][-1]["session"] == session and res["chat"]["title"] == chat["title"], res)
         status, other = post("/api/ai/chat", {"message": "שיחה שנייה"})
         check("coach: another chat gets its own session id and Hebrew title", other["chat"]["title"] == "שיחה שנייה"
@@ -625,17 +644,17 @@ def run_ai_checks(base):
         status, body = http(base, "GET", "/api/chats")
         lst = json.loads(body)
         check("chat list: latest first with message counts", status == 200 and [c["id"] for c in lst[:2]] == [other["chat"]["id"], cid]
-              and lst[1]["messages"] == 8 and lst[0]["title"] == "שיחה שנייה", lst)
+              and lst[1]["messages"] == 10 and lst[0]["title"] == "שיחה שנייה", lst)
         status, body = http(base, "GET", f"/api/chats/{cid}")
         check("a chat can be opened from any device", status == 200 and json.loads(body) == res["chat"])
         fake["status"] = 500
         status, res = post("/api/ai/chat", {"chat_id": cid, "message": "third"})
         check("model failure: the message stays saved and comes back with the error", status == 502
-              and res["chat"]["messages"][-1]["content"] == "third" and len(res["chat"]["messages"]) == 9, res)
+              and res["chat"]["messages"][-1]["content"] == "third" and len(res["chat"]["messages"]) == 11, res)
         fake["status"] = 200
         n = len(fake["seen"])
         status, res = post("/api/ai/chat", {"chat_id": cid, "retry": True})
-        check("retry answers the saved message without repeating it", status == 200 and len(res["chat"]["messages"]) == 10
+        check("retry answers the saved message without repeating it", status == 200 and len(res["chat"]["messages"]) == 12
               and fake["seen"][-1]["body"]["messages"][-1]["content"] == "third" and len(fake["seen"]) == n + 1, res)
         check("coach: bad requests", post("/api/ai/chat", {"message": " "})[0] == 400
               and post("/api/ai/chat", {"chat_id": cid, "retry": True})[0] == 400

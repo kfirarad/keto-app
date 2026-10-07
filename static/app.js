@@ -1238,6 +1238,8 @@ function renderCoach() {
       ${proposalState(m.rows_status, i, "rows", "Review and add")}` : ""}
       ${m.notes && m.notes.length ? `<ul class="msg-rows">${m.notes.map(n => `<li><span class="it">${noteTags(n)}${n.notes ? `<small dir="auto"> ${esc(n.notes)}</small>` : ""}</span><span class="num">${n.date === today() ? "" : dm(n.date) + " "}${n.time || ""}</span></li>`).join("")}</ul>
       ${proposalState(m.notes_status, i, "notes", m.notes.length === 1 ? "Add to log" : `Add ${m.notes.length} to log`)}` : ""}
+      ${m.measurements && m.measurements.length ? `<ul class="msg-rows num">${m.measurements.map(x => `<li><span class="it">${measureText(x)}${x.notes ? `<small dir="auto"> ${esc(x.notes)}</small>` : ""}</span><span>${x.date === today() ? "" : dm(x.date) + " "}${x.time || ""}</span></li>`).join("")}</ul>
+      ${proposalState(m.measurements_status, i, "measurements", m.measurements.length === 1 ? "Add measurement" : `Add ${m.measurements.length} measurements`)}` : ""}
       <time class="msg-at num" datetime="${esc(m.at)}">${stamp(m.at)}</time>
     </div>`).join("");
   const head = chat
@@ -1265,7 +1267,7 @@ function renderCoach() {
 function proposalState(status, i, kind, label) {
   if (status === "added") return `<p class="outcome added">Added to your log</p>`;
   if (status === "declined") return `<p class="outcome declined">Not added <button type="button" class="link" data-act="coach-undecide" data-kind="${kind}" data-i="${i}">Reconsider</button></p>`;
-  return `<div class="row-btns"><button type="button" class="btn btn-primary" data-act="coach-${kind === "rows" ? "review" : "add-notes"}" data-i="${i}">${label}</button>
+  return `<div class="row-btns"><button type="button" class="btn btn-primary" data-act="coach-${kind === "rows" ? "review" : "add-" + kind}" data-i="${i}">${label}</button>
     <button type="button" class="btn" data-act="coach-decline" data-kind="${kind}" data-i="${i}">Dismiss</button></div>`;
 }
 // Record the outcome on the saved message, so every device shows it.
@@ -1282,6 +1284,16 @@ function addCoachNotes(m) {
     toast(`Added ${m.notes.map(noteText).join("; ")}`, () => Promise.all(ids.map(id => api(`/api/notes/${id}`, { method: "DELETE" })))
       .then(() => markProposal(chatId, m.id, "notes", null)));
     return markProposal(chatId, m.id, "notes", "added");
+  }).catch(fail);
+}
+
+function addCoachMeasures(m) {
+  const chatId = S.coach.chat.id;
+  Promise.all(m.measurements.map(x => send("POST", "/api/measurements", measurePayload(x)))).then(res => {
+    const ids = res.map(r => r.measurement.id);
+    toast(`Added ${m.measurements.map(measureText).join("; ")}`, () => Promise.all(ids.map(id => api(`/api/measurements/${id}`, { method: "DELETE" })))
+      .then(() => markProposal(chatId, m.id, "measurements", null)));
+    return markProposal(chatId, m.id, "measurements", "added");
   }).catch(fail);
 }
 
@@ -1613,6 +1625,7 @@ document.addEventListener("click", ev => {
       return;
     }
     case "coach-add-notes": { const m = S.coach.chat && S.coach.chat.messages[+el.dataset.i]; if (m && m.notes.length) { el.disabled = true; addCoachNotes(m); } return; }
+    case "coach-add-measurements": { const m = S.coach.chat && S.coach.chat.messages[+el.dataset.i]; if (m && m.measurements.length) { el.disabled = true; addCoachMeasures(m); } return; }
     case "coach-decline": case "coach-undecide": {
       const m = S.coach.chat && S.coach.chat.messages[+el.dataset.i];
       if (m) markProposal(S.coach.chat.id, m.id, el.dataset.kind, act === "coach-decline" ? "declined" : null);

@@ -46,8 +46,9 @@ COACH_SYSTEM = f"""You are a keto coach inside the user's personal food log. You
 - Answer in the language of the user's last message. Plain text only, no markdown, no tables.
 - Dates are DD/MM/YYYY. Net carbs are what counts against the daily goal.
 - Keep the whole reply under 150 words.
-- You cannot change the log, so never say that you added or logged something. When the user asks you to log food, a workout, a symptom or a note, or accepts something you suggested, say it is ready to approve and finish your reply with a line that starts with LOG: followed by one JSON object {{"rows": [row, ...], "notes": [note, ...]}} (leave out the list you do not need); the app shows it for the user to approve. Do not add LOG: otherwise.
+- You cannot change the log, so never say that you added or logged something. When the user asks you to log food, a workout, a symptom, a note or a body measurement (weight, blood glucose, blood ketones, blood pressure, pulse), or accepts something you suggested, say it is ready to approve and finish your reply with a line that starts with LOG: followed by one JSON object {{"rows": [row, ...], "notes": [note, ...], "measurements": [measurement, ...]}} (leave out the lists you do not need); the app shows it for the user to approve. Do not add LOG: otherwise.
 - Note format: {{"date": "DD/MM/YYYY", "time": "HH:MM", "workout": "Run", "minutes": 32, "symptoms": ["Headache"], "notes": "free text"}}. Every field is optional but a note needs a workout, a symptom or text. A workout is one short kind (Run, Walk, Gym, Bike, Swim, Yoga, ...) with minutes when known; put distance, pace and other details in notes. Symptoms are short names. Leave out date and time for now; use them when the user says when it happened.
+- Measurement format: {{"date": "DD/MM/YYYY", "time": "HH:MM", "weight_kg": 82.4, "glucose_mmol": 5.1, "ketones_mmol": 1.8, "bp_sys": 121, "bp_dia": 79, "pulse": 62, "notes": "free text"}}. Give only the values the user stated, never guess one. Values taken at the same moment go in one measurement. Glucose and ketones are blood values in mmol/L: convert glucose given in mg/dL by dividing by 18. Blood pressure needs both numbers. Date and time as for notes.
 {ROW_RULES}
 - You are not a doctor. For worrying blood pressure, glucose or symptoms, say so briefly and point to a doctor."""
 
@@ -112,6 +113,30 @@ def _clean_notes(notes):
                     "time": r["n_time"] or (db.now_hhmm() if r["n_date"] == db.today_iso() else None),
                     "workout": r["workout"], "minutes": None if r["minutes"] is None else db._clean_num(r["minutes"]),
                     "symptoms": json.loads(r["symptoms"]), "notes": r["notes"]})
+    return out
+
+
+def _clean_measurements(items):
+    """Keep proposed body measurements that would be accepted."""
+    out = []
+    for m in items if isinstance(items, list) else []:
+        if len(out) >= 10:
+            break
+        try:
+            obj = {k: m[k] for k in db.MEASURE_INPUT if m.get(k) not in (None, "")}
+            g = obj.get("glucose_mmol")
+            # Nobody has 40+ mmol/L: a number that high was given in mg/dL.
+            if isinstance(g, (int, float)) and not isinstance(g, bool) and 40 < g <= 720:
+                obj["glucose_mmol"] = round(g / 18.016, 2)
+            r = db.validate_measurement(obj)
+        except (db.ValidationError, TypeError, AttributeError):
+            continue
+        if r["m_date"] > db.today_iso():
+            continue
+        out.append({"date": db.format_date(r["m_date"]),
+                    "time": r["m_time"] or (db.now_hhmm() if r["m_date"] == db.today_iso() else None),
+                    **{f: None if r[f] is None else db._clean_num(r[f]) for f in db.MEASURE_FIELDS},
+                    "notes": r["notes"]})
     return out
 
 
@@ -203,16 +228,17 @@ def chat(payload):
     except llm.LLMError as e:
         e.data = {"chat": saved}
         raise
-    rows, notes = [], []
+    rows, notes, measures = [], [], []
     parts = _LOG_RE.split(reply)
     if len(parts) > 1:
         obj = llm.extract_json(parts[-1])
         if obj is not None:
             rows, _ = _clean_rows(obj.get("rows"))
             notes = _clean_notes(obj.get("notes"))
+            measures = _clean_measurements(obj.get("measurements"))
             reply = "LOG:".join(parts[:-1]).strip()
     reply = reply.replace("**", "").strip()
-    return {"chat": db.add_chat_message(saved["id"], "assistant", reply or "Ready for you to approve.", rows, notes)}
+    return {"chat": db.add_chat_message(saved["id"], "assistant", reply or "Ready for you to approve.", rows, notes, measures)}
 
 
 _summaries = {}     # (days, data hash) -> result; the same numbers give the same review
